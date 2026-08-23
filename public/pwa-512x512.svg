@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="busGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+    <linearGradient id="glassGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.9" />
+    </linearGradient>
+  </defs>
+  <!-- Background with rounded corners -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  <rect x="4" y="4" width="504" height="504" rx="108" fill="none" stroke="#f59e0b" stroke-width="4" stroke-opacity="0.3" />
+  
+  <!-- Bus Body -->
+  <g transform="translate(96, 106)">
+    <!-- Bus main frame -->
+    <rect x="16" y="26" width="288" height="224" rx="48" fill="url(#busGrad)" />
+    <!-- Bus roof cap -->
+    <path d="M 48 26 Q 160 5 272 26" fill="none" stroke="#fbbf24" stroke-width="10" stroke-linecap="round" />
+    
+    <!-- Windshield / Windows -->
+    <rect x="42" y="54" width="108" height="74" rx="16" fill="url(#glassGrad)" />
+    <rect x="170" y="54" width="108" height="74" rx="16" fill="url(#glassGrad)" />
+    
+    <!-- Front Grill / Sign -->
+    <rect x="96" y="150" width="128" height="26" rx="8" fill="#0f172a" />
+    <text x="160" y="168" fill="#fbbf24" font-size="18" font-weight="900" text-anchor="middle" font-family="system-ui, sans-serif" letter-spacing="2">SCHOOL BUS</text>
+    
+    <!-- Headlights -->
+    <circle cx="58" cy="198" r="16" fill="#fef08a" />
+    <circle cx="58" cy="198" r="8" fill="#ffffff" />
+    <circle cx="262" cy="198" r="16" fill="#fef08a" />
+    <circle cx="262" cy="198" r="8" fill="#ffffff" />
+    
+    <!-- Bumper -->
+    <rect x="32" y="230" width="256" height="22" rx="10" fill="#334155" />
+    
+    <!-- Wheels -->
+    <circle cx="74" cy="262" r="38" fill="#0f172a" stroke="#475569" stroke-width="10" />
+    <circle cx="74" cy="262" r="14" fill="#94a3b8" />
+    <circle cx="246" cy="262" r="38" fill="#0f172a" stroke="#475569" stroke-width="10" />
+    <circle cx="246" cy="262" r="14" fill="#94a3b8" />
+  </g>
+</svg>
