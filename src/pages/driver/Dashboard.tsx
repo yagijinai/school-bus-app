@@ -144,7 +144,7 @@ export const DriverDashboard: React.FC = () => {
 
     // reservations レコードがまだない場合は生徒デフォルト設定を反映
     if (selectedTrip === '登校便') {
-      return student ? student.default_morning_ride : false
+      return student ? (student.default_morning_ride ?? true) : false
     } else {
       return student ? student.default_afternoon_schedule === selectedTrip : false
     }

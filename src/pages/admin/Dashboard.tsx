@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext'
 import type { Student, BusStop, SchoolHoliday } from '../../types/app'
 import { ExportAndPrintModal } from '../../components/admin/ExportAndPrintModal'
 import { SystemMaintenanceTab } from '../../components/admin/SystemMaintenanceTab'
+import { saveGuardianMaster, fetchAllMasterFromGAS } from '../../lib/api/gas'
 import { 
   LogOut, Shield, Bus, Users, 
   Calendar as CalendarIcon, Clock, AlertCircle, CheckCircle2, 
@@ -262,9 +263,9 @@ export const AdminDashboard: React.FC = () => {
     if (existing) {
       setSpecialForm({
         is_temporary_operation: existing.is_temporary_operation ?? false,
-        is_all_day_suspended: existing.is_all_day_suspended,
-        is_morning_suspended: existing.is_morning_suspended,
-        is_afternoon_suspended: existing.is_afternoon_suspended,
+        is_all_day_suspended: existing.is_all_day_suspended ?? false,
+        is_morning_suspended: existing.is_morning_suspended ?? false,
+        is_afternoon_suspended: existing.is_afternoon_suspended ?? false,
         morning_trip_time: existing.morning_trip_time ? existing.morning_trip_time.substring(0, 5) : '',
         trip_1_time: existing.trip_1_time ? existing.trip_1_time.substring(0, 5) : '',
         trip_2_time: existing.trip_2_time ? existing.trip_2_time.substring(0, 5) : '',
@@ -538,25 +539,38 @@ export const AdminDashboard: React.FC = () => {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null)
   const [studentFormData, setStudentFormData] = useState({
     name: '',
+    student2: '',
     student_code: '',
     verification_code: '',
     grade: '1年生',
     class_name: '1組',
     household_id: '',
-    parent_id: ''
+    parent_id: '',
+    parent_email: '',
+    bus_stop_name: busStops[0]?.stop_name || '草香会館',
+    default_morning: '乗る',
+    default_afternoon: '2便',
+    memo: ''
   })
+  const [isSavingStudent, setIsSavingStudent] = useState(false)
 
   const handleOpenStudentModal = (student?: Student) => {
     if (student) {
       setEditingStudent(student)
       setStudentFormData({
         name: student.name,
+        student2: '',
         student_code: student.student_code || '',
         verification_code: student.verification_code || '',
         grade: student.grade || '1年生',
         class_name: student.class_name || '1組',
         household_id: student.household_id || '',
-        parent_id: student.parent_id || ''
+        parent_id: student.parent_id || '',
+        parent_email: student.parent_email || '',
+        bus_stop_name: student.bus_stop_name || busStops[0]?.stop_name || '草香会館',
+        default_morning: student.default_morning_ride ? '乗る' : '乗らない',
+        default_afternoon: student.default_afternoon_schedule || '2便',
+        memo: ''
       })
     } else {
       setEditingStudent(null)
@@ -564,12 +578,18 @@ export const AdminDashboard: React.FC = () => {
       const randomHouseholdNum = Math.floor(100 + Math.random() * 900)
       setStudentFormData({
         name: '',
+        student2: '',
         student_code: `STU-${randomCodeNum}`,
         verification_code: `PASS${randomCodeNum}`,
         grade: '1年生',
         class_name: '1組',
         household_id: `H-${randomHouseholdNum}`,
-        parent_id: '' // 事前登録時は未紐付け
+        parent_id: '',
+        parent_email: '',
+        bus_stop_name: busStops[0]?.stop_name || '草香会館',
+        default_morning: '乗る',
+        default_afternoon: '2便',
+        memo: ''
       })
     }
     setIsStudentModalOpen(true)
@@ -581,37 +601,62 @@ export const AdminDashboard: React.FC = () => {
       alert('生徒名を入力してください。')
       return
     }
-    if (!studentFormData.student_code.trim()) {
-      alert('生徒IDを入力してください。')
-      return
-    }
 
-    if (editingStudent) {
-      await updateStudent(editingStudent.id, {
-        name: studentFormData.name.trim(),
-        student_code: studentFormData.student_code.trim() || null,
-        verification_code: studentFormData.verification_code.trim() || null,
-        grade: studentFormData.grade,
-        class_name: studentFormData.class_name.trim() || null,
-        household_id: studentFormData.household_id.trim() || null,
-        parent_id: studentFormData.parent_id.trim() ? studentFormData.parent_id : null
+    setIsSavingStudent(true)
+
+    try {
+      const parentEmail = studentFormData.parent_email.trim() || `${studentFormData.student_code || Date.now()}@parent.school-bus.app`
+      
+      // 1. GAS API へ action: "saveGuardianMaster" を POST 送信（スプレッドシート行更新・追加）
+      await saveGuardianMaster({
+        parentEmail,
+        student1: studentFormData.name.trim(),
+        student2: studentFormData.student2.trim() || null,
+        busStop: studentFormData.bus_stop_name || '草香会館',
+        memo: studentFormData.memo.trim() || '',
+        defaultToSchool: studentFormData.default_morning,
+        defaultFromSchool: studentFormData.default_afternoon
       })
-    } else {
-      await addStudent({
-        name: studentFormData.name.trim(),
-        student_code: studentFormData.student_code.trim() || null,
-        verification_code: studentFormData.verification_code.trim() || null,
-        grade: studentFormData.grade,
-        class_name: studentFormData.class_name.trim() || null,
-        household_id: studentFormData.household_id.trim() || null,
-        parent_id: null,
-        bus_route_id: null,
-        default_bus_stop_id: null,
-        default_morning_ride: true,
-        default_afternoon_schedule: '下校2便'
-      })
+
+      // 2. アプリ内ステートへ登録
+      if (editingStudent) {
+        await updateStudent(editingStudent.id, {
+          name: studentFormData.name.trim(),
+          student_code: studentFormData.student_code.trim() || null,
+          verification_code: studentFormData.verification_code.trim() || null,
+          grade: studentFormData.grade,
+          class_name: studentFormData.class_name.trim() || null,
+          household_id: studentFormData.household_id.trim() || null,
+          parent_id: studentFormData.parent_id.trim() ? studentFormData.parent_id : parentEmail,
+          parent_email: parentEmail,
+          bus_stop_name: studentFormData.bus_stop_name,
+          default_morning_ride: studentFormData.default_morning === '乗る',
+          default_afternoon_schedule: studentFormData.default_afternoon
+        })
+      } else {
+        await addStudent({
+          name: studentFormData.name.trim(),
+          student_code: studentFormData.student_code.trim() || null,
+          verification_code: studentFormData.verification_code.trim() || null,
+          grade: studentFormData.grade,
+          class_name: studentFormData.class_name.trim() || null,
+          household_id: studentFormData.household_id.trim() || null,
+          parent_id: parentEmail,
+          parent_email: parentEmail,
+          bus_route_id: 'route-a',
+          default_bus_stop_id: 'stop-1',
+          bus_stop_name: studentFormData.bus_stop_name,
+          default_morning_ride: studentFormData.default_morning === '乗る',
+          default_afternoon_schedule: studentFormData.default_afternoon
+        })
+      }
+      setIsStudentModalOpen(false)
+    } catch (err: any) {
+      console.error('Failed to save student to GAS:', err)
+      alert(err.message || '生徒の登録通信中にエラーが発生しました。')
+    } finally {
+      setIsSavingStudent(false)
     }
-    setIsStudentModalOpen(false)
   }
 
   const handleDeleteStudent = async (student: Student) => {
@@ -635,7 +680,7 @@ export const AdminDashboard: React.FC = () => {
       setStopFormData({
         stop_name: stop.stop_name,
         arrival_time_morning: stop.arrival_time_morning ? stop.arrival_time_morning.substring(0, 5) : '08:00',
-        bus_route_id: stop.bus_route_id
+        bus_route_id: stop.bus_route_id || 'route-a'
       })
     } else {
       setEditingStop(null)
@@ -2057,6 +2102,19 @@ export const AdminDashboard: React.FC = () => {
                 </select>
 
                 <button
+                  onClick={async () => {
+                    await refreshData()
+                    const sheet = await fetchAllMasterFromGAS()
+                    alert(`スプレッドシートから${sheet.length}件のデータを最新化しました。`)
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-850 hover:bg-slate-800 text-slate-200 font-bold rounded-xl text-xs border border-slate-700 active:scale-95 transition-all"
+                  title="Googleスプレッドシート「生徒・保護者マスタ」から最新情報を取得"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  GASマスタ同期
+                </button>
+
+                <button
                   onClick={() => handleOpenStudentModal()}
                   className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20 active:scale-95 transition-all"
                 >
@@ -2769,7 +2827,7 @@ export const AdminDashboard: React.FC = () => {
             <form onSubmit={handleSaveStudent} className="space-y-4 text-xs">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">生徒氏名 <span className="text-rose-400">*</span></label>
+                  <label className="block font-bold text-slate-300 mb-1">生徒名１（対象生徒） <span className="text-rose-400">*</span></label>
                   <input
                     type="text"
                     placeholder="例：佐藤 結衣"
@@ -2781,7 +2839,20 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">学年 <span className="text-rose-400">*</span></label>
+                  <label className="block font-bold text-slate-300 mb-1">生徒名２（きょうだい・任意）</label>
+                  <input
+                    type="text"
+                    placeholder="例：佐藤 健太"
+                    value={studentFormData.student2}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, student2: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">学年</label>
                   <select
                     value={studentFormData.grade}
                     onChange={(e) => setStudentFormData({ ...studentFormData, grade: e.target.value })}
@@ -2795,9 +2866,7 @@ export const AdminDashboard: React.FC = () => {
                     <option value="6年生">6年生</option>
                   </select>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-300 mb-1">組（クラス）</label>
                   <input
@@ -2808,77 +2877,109 @@ export const AdminDashboard: React.FC = () => {
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">
+                    保護者メールアドレス（A列） <span className="text-amber-400">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="parent@example.com"
+                    value={studentFormData.parent_email}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, parent_email: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    required
+                  />
+                </div>
 
                 <div>
-                  <label className="block font-bold text-slate-300 mb-1">世帯ID（きょうだいグループ）</label>
-                  <input
-                    type="text"
-                    placeholder="例：H-101（兄弟同じIDを入力）"
-                    value={studentFormData.household_id}
-                    onChange={(e) => setStudentFormData({ ...studentFormData, household_id: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-mono font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
-                  />
+                  <label className="block font-bold text-slate-300 mb-1">
+                    登録バス停名（F列） <span className="text-amber-400">*</span>
+                  </label>
+                  <select
+                    value={studentFormData.bus_stop_name}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, bus_stop_name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    {busStops.map(stop => (
+                      <option key={stop.id} value={stop.stop_name}>
+                        {stop.order_index}. {stop.stop_name} (朝 {stop.arrival_time_morning?.substring(0, 5) || '07:30'}着)
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              {/* 照合用ID・パスコード */}
-              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 space-y-3">
-                <span className="text-[11px] font-black text-amber-300 flex items-center gap-1.5">
-                  <KeyRound className="h-4 w-4 text-amber-400" />
-                  保護者照合用セキュリティ情報（学校配布用）
-                </span>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-400 mb-1">
-                      生徒ID（学籍コード） <span className="text-rose-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="例：STU-101"
-                      value={studentFormData.student_code}
-                      onChange={(e) => setStudentFormData({ ...studentFormData, student_code: e.target.value })}
-                      className="w-full bg-slate-950 border border-amber-500/30 rounded-xl px-3.5 py-2 text-white font-mono font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-400 mb-1">
-                      照合キー（初期パスコード） <span className="text-rose-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="例：PASS101"
-                      value={studentFormData.verification_code}
-                      onChange={(e) => setStudentFormData({ ...studentFormData, verification_code: e.target.value })}
-                      className="w-full bg-slate-950 border border-amber-500/30 rounded-xl px-3.5 py-2 text-white font-mono font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
-                      required
-                    />
-                  </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">基本_登校 (H列)</label>
+                  <select
+                    value={studentFormData.default_morning}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, default_morning: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    <option value="乗る">乗る（標準運行）</option>
+                    <option value="乗らない">乗らない</option>
+                  </select>
                 </div>
+
+                <div>
+                  <label className="block font-bold text-slate-300 mb-1">基本_下校 (I列)</label>
+                  <select
+                    value={studentFormData.default_afternoon}
+                    onChange={(e) => setStudentFormData({ ...studentFormData, default_afternoon: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                  >
+                    <option value="1便">1便 (下校1便)</option>
+                    <option value="2便">2便 (下校2便)</option>
+                    <option value="3便">3便 (下校3便)</option>
+                    <option value="乗らない">乗らない</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-300 mb-1">備考 (G列・メモ)</label>
+                <input
+                  type="text"
+                  placeholder="特記事項があれば入力"
+                  value={studentFormData.memo}
+                  onChange={(e) => setStudentFormData({ ...studentFormData, memo: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white text-xs focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
               </div>
 
               <div className="bg-slate-950/60 border border-slate-850 p-3 rounded-2xl text-[11px] text-slate-400 space-y-1">
-                <p className="font-bold text-slate-300">💡 登校パターン・バス停の設定について</p>
+                <p className="font-bold text-amber-300">💡 Googleスプレッドシート「生徒・保護者マスター」直接保存</p>
                 <p>
-                  利用バス停や毎日の基本登下校パターンは、保護者が初回ログイン（生徒照合）時に直接設定します。学校側は基本情報のみを事前登録してください。
+                  保存を実行すると、GAS Web App（POST / action: "saveGuardianMaster"）経由でスプレッドシートへ即時書き込み・更新されます。
                 </p>
               </div>
 
               <div className="pt-4 flex gap-3">
                 <button
                   type="button"
+                  disabled={isSavingStudent}
                   onClick={() => setIsStudentModalOpen(false)}
-                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl font-bold transition-all"
+                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl font-bold transition-all disabled:opacity-50"
                 >
                   キャンセル
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black rounded-xl shadow-lg shadow-amber-500/20 active:scale-95 transition-all"
+                  disabled={isSavingStudent}
+                  className="flex-1 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black rounded-xl shadow-lg shadow-amber-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
-                  {editingStudent ? '変更を保存する' : '事前登録を発行'}
+                  {isSavingStudent ? (
+                    <>
+                      <span className="animate-spin h-4 w-4 border-2 border-slate-950 border-t-transparent rounded-full" />
+                      <span>GAS送信中...</span>
+                    </>
+                  ) : (
+                    <span>{editingStudent ? 'スプレッドシートを更新' : 'スプレッドシートへ事前登録'}</span>
+                  )}
                 </button>
               </div>
             </form>

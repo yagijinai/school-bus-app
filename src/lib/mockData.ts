@@ -12,58 +12,30 @@ export const mockBusStops: BusStop[] = [
   {
     id: 'stop-1',
     bus_route_id: 'route-a',
-    stop_name: '青葉台公園前',
+    stop_name: '高山研修所前',
     arrival_time_morning: '07:30:00',
     order_index: 1
   },
   {
     id: 'stop-2',
     bus_route_id: 'route-a',
-    stop_name: '美咲が丘三丁目',
+    stop_name: '山田水車公園前',
     arrival_time_morning: '07:42:00',
     order_index: 2
   },
   {
     id: 'stop-3',
     bus_route_id: 'route-a',
-    stop_name: '東小学校前歩道橋',
+    stop_name: '明神',
     arrival_time_morning: '07:55:00',
     order_index: 3
   },
   {
     id: 'stop-4',
     bus_route_id: 'route-a',
-    stop_name: '中央駅ロータリー',
+    stop_name: '草香会館',
     arrival_time_morning: '08:05:00',
     order_index: 4
-  },
-  {
-    id: 'stop-5',
-    bus_route_id: 'route-a',
-    stop_name: '市役所前（バス停）',
-    arrival_time_morning: '08:15:00',
-    order_index: 5
-  },
-  {
-    id: 'stop-6',
-    bus_route_id: 'route-a',
-    stop_name: '桜木通り交差点',
-    arrival_time_morning: '08:25:00',
-    order_index: 6
-  },
-  {
-    id: 'stop-7',
-    bus_route_id: 'route-a',
-    stop_name: '緑ヶ丘団地センター',
-    arrival_time_morning: '08:35:00',
-    order_index: 7
-  },
-  {
-    id: 'stop-8',
-    bus_route_id: 'route-a',
-    stop_name: '西ヶ原クリニック前',
-    arrival_time_morning: '08:45:00',
-    order_index: 8
   }
 ]
 
@@ -74,7 +46,7 @@ export const mockBusOperations: BusOperation[] = [
     date: new Date().toISOString().split('T')[0],
     trip_name: '登校便',
     status: 'running',
-    delay_minutes: 5
+    delay_minutes: 0
   },
   {
     id: 'op-a-afternoon-1',
@@ -118,92 +90,9 @@ export const mockBusOperations: BusOperation[] = [
   }
 ]
 
-export const mockStudents: Student[] = [
-  {
-    id: 'std-1',
-    parent_id: 'parent-demo-id',
-    student_code: 'STU-001',
-    verification_code: 'PASS001',
-    grade: '3年生',
-    class_name: '1組',
-    household_id: 'H-001',
-    name: '山田 花子',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-1',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校2便'
-  },
-  {
-    id: 'std-2',
-    parent_id: 'parent-demo-id',
-    student_code: 'STU-002',
-    verification_code: 'PASS002',
-    grade: '1年生',
-    class_name: '2組',
-    household_id: 'H-001',
-    name: '山田 太郎',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-1',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校2便'
-  },
-  {
-    id: 'std-101',
-    parent_id: 'parent-sato-id',
-    student_code: 'STU-101',
-    verification_code: 'PASS101',
-    grade: '2年生',
-    class_name: '1組',
-    household_id: 'H-002',
-    name: '佐藤 結衣',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-2',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校2便'
-  },
-  {
-    id: 'std-102',
-    parent_id: 'parent-sato-id',
-    student_code: 'STU-102',
-    verification_code: 'PASS102',
-    grade: '1年生',
-    class_name: '1組',
-    household_id: 'H-002',
-    name: '佐藤 陽斗',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-2',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校2便'
-  },
-  {
-    id: 'std-201',
-    parent_id: 'parent-suzuki-id',
-    student_code: 'STU-201',
-    verification_code: 'PASS201',
-    grade: '3年生',
-    class_name: '2組',
-    household_id: 'H-003',
-    name: '鈴木 陸',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-3',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校3便'
-  },
-  {
-    id: 'std-301',
-    parent_id: 'parent-takahashi-id',
-    student_code: 'STU-301',
-    verification_code: 'PASS301',
-    grade: '1年生',
-    class_name: '3組',
-    household_id: 'H-004',
-    name: '高橋 葵',
-    bus_route_id: 'route-a',
-    default_bus_stop_id: 'stop-4',
-    default_morning_ride: true,
-    default_afternoon_schedule: '下校1便'
-  }
-]
+// モック生徒データ（山田太郎・花子等）は完全削除され、GAS / スプレッドシート連携へ移行
+export const mockStudents: Student[] = []
+
 export const mockMonthlyTripSchedules: MonthlyTripSchedule[] = [
   { id: 'mts-4', month: 4, shortened_day_of_week: 3, morning_trip_time: '07:30:00', trip_1_time: '15:00:00', trip_2_time: '16:00:00', trip_3_time: '17:00:00', trip_4_time: '18:00:00', trip_5_time: '18:30:00', wed_trip_1_time: '14:00:00', wed_trip_2_time: '15:00:00', wed_trip_3_time: '16:00:00', wed_trip_4_time: '17:00:00', wed_trip_5_time: null, note: '新学期・春ダイヤ（水曜5h授業）' },
   { id: 'mts-5', month: 5, shortened_day_of_week: 3, morning_trip_time: '07:30:00', trip_1_time: '15:00:00', trip_2_time: '16:30:00', trip_3_time: '17:30:00', trip_4_time: '18:20:00', trip_5_time: '18:45:00', wed_trip_1_time: '14:00:00', wed_trip_2_time: '15:30:00', wed_trip_3_time: '16:30:00', wed_trip_4_time: '17:30:00', wed_trip_5_time: null, note: '夏期部活延長ダイヤ' },

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { 
-  Bus, User, ShieldCheck, KeyRound, 
+  Bus, User, ShieldCheck, 
   ArrowRight, AlertCircle, 
   Lock, RefreshCw, Smartphone
 } from 'lucide-react'
@@ -15,17 +15,12 @@ export const Login: React.FC = () => {
     loginAsParent, 
     loginAsDriver, 
     loginAsAdmin, 
-    signInDemoUser, 
-    students,
+    signInWithGoogle,
     user,
     profile
   } = useAuth()
 
   const [activeTab, setActiveTab] = useState<LoginRoleTab>('parent')
-
-  // 保護者ログイン入力
-  const [parentStudentCode, setParentStudentCode] = useState('')
-  const [parentVerificationCode, setParentVerificationCode] = useState('')
 
   // ドライバーログイン入力
   const [driverPin, setDriverPin] = useState('')
@@ -38,22 +33,20 @@ export const Login: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [savedSession, setSavedSession] = useState<{
     role: string
-    studentName?: string
-    studentCode?: string
+    email?: string
     full_name?: string
   } | null>(null)
 
   // 前回のセッション情報の読み込み
   useEffect(() => {
     try {
-      const savedStr = localStorage.getItem('school_bus_active_session_v1')
+      const savedStr = localStorage.getItem('school_bus_active_session_v2')
       if (savedStr) {
         const saved = JSON.parse(savedStr)
         if (saved && saved.profile) {
           setSavedSession({
             role: saved.profile.role,
-            studentName: saved.studentName,
-            studentCode: saved.studentCode,
+            email: saved.user?.email,
             full_name: saved.profile.full_name
           })
         }
@@ -63,12 +56,16 @@ export const Login: React.FC = () => {
     }
   }, [])
 
-  // 既にログイン中の場合はリダイレクト
+  // 既にログイン中の場合は保護者ダッシュボードまたは該当画面へ安全にリダイレクト
   useEffect(() => {
     if (user && profile) {
-      if (profile.role === 'parent') navigate('/parent/dashboard')
-      else if (profile.role === 'driver') navigate('/driver/dashboard')
-      else if (profile.role === 'admin') navigate('/admin/dashboard')
+      if (profile.role === 'parent') {
+        navigate('/parent/dashboard')
+      } else if (profile.role === 'driver') {
+        navigate('/driver/dashboard')
+      } else if (profile.role === 'admin') {
+        navigate('/admin/dashboard')
+      }
     }
   }, [user, profile, navigate])
 
@@ -78,21 +75,14 @@ export const Login: React.FC = () => {
     setErrorMessage(null)
   }
 
-  // 保護者ログイン実行
-  const handleParentLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
+  // Google ログインボタン押下（保護者導線はこれ1つに完全一本化）
+  const handleGoogleLogin = async () => {
     setErrorMessage(null)
     setIsLoading(true)
-
     try {
-      const res = await loginAsParent(parentStudentCode, parentVerificationCode)
-      if (res.success) {
-        navigate('/parent/dashboard')
-      } else {
-        setErrorMessage(res.error || '生徒IDまたは照合キーが一致しません。')
-      }
+      await signInWithGoogle()
     } catch (err: any) {
-      setErrorMessage(err.message || 'ログイン中にエラーが発生しました。')
+      setErrorMessage(err.message || 'Google認証エラーが発生しました。')
     } finally {
       setIsLoading(false)
     }
@@ -141,17 +131,8 @@ export const Login: React.FC = () => {
   // 前回のセッションからの復帰
   const handleResumeSavedSession = () => {
     if (!savedSession) return
-    if (savedSession.role === 'parent') {
-      if (savedSession.studentCode) {
-        // 保存されていた生徒情報でログイン
-        const student = students.find(s => s.student_code === savedSession.studentCode || s.id === savedSession.studentCode)
-        if (student) {
-          loginAsParent(student.student_code || student.id, student.verification_code || student.name || '')
-          return
-        }
-      }
-      signInDemoUser('parent', false)
-      navigate('/parent/dashboard')
+    if (savedSession.role === 'parent' && savedSession.email) {
+      loginAsParent(savedSession.email)
     } else if (savedSession.role === 'driver') {
       loginAsDriver()
       navigate('/driver/dashboard')
@@ -162,9 +143,9 @@ export const Login: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-10 sm:px-6 lg:px-8 relative overflow-hidden text-slate-100">
+    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-10 sm:px-6 lg:px-8 relative overflow-hidden text-slate-100 font-sans">
       
-      {/* 背景のグラデーションオーブ装飾 */}
+      {/* 背景装飾 */}
       <div className="absolute top-1/4 left-1/3 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/3 translate-x-1/2 translate-y-1/2 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -177,7 +158,7 @@ export const Login: React.FC = () => {
           スクールバス運行管理システム
         </h1>
         <p className="mt-2 text-xs sm:text-sm text-slate-400">
-          保護者予約・リアルタイム遅延見守り・ドライバー点呼を一元管理
+          Googleアカウント認証 ＆ スプレッドシート完全連携
         </p>
       </div>
 
@@ -185,7 +166,7 @@ export const Login: React.FC = () => {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-lg z-10 px-4">
         <div className="bg-slate-900/90 border border-slate-800 backdrop-blur-2xl py-6 sm:py-8 px-4 sm:px-8 shadow-2xl rounded-3xl space-y-6">
           
-          {/* 前回セッションがある場合のクイック復帰バナー */}
+          {/* 前回セッションがある場合の復帰バナー */}
           {savedSession && (
             <div className="p-3.5 bg-gradient-to-r from-indigo-950/70 to-purple-950/70 border border-indigo-500/30 rounded-2xl flex items-center justify-between gap-3 animate-in fade-in">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -197,7 +178,7 @@ export const Login: React.FC = () => {
                     前回のログイン情報
                   </span>
                   <p className="text-xs font-bold text-white truncate">
-                    {savedSession.studentName ? `${savedSession.studentName} 保護者様` : savedSession.full_name || '前回利用ユーザー'}
+                    {savedSession.full_name || savedSession.email || '前回利用ユーザー'}
                   </p>
                 </div>
               </div>
@@ -264,7 +245,7 @@ export const Login: React.FC = () => {
             </div>
           </div>
 
-          {/* エラーメッセージ表示 */}
+          {/* エラーメッセージ */}
           {errorMessage && (
             <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-300 text-xs font-bold flex items-start gap-2.5 animate-in fade-in">
               <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
@@ -272,107 +253,57 @@ export const Login: React.FC = () => {
             </div>
           )}
 
-          {/* ========================================================= */}
-          {/* 1. 保護者ログインフォーム */}
-          {/* ========================================================= */}
+          {/* 1. 保護者ログイン（Googleアカウント認証ボタン1つに完全一本化） */}
           {activeTab === 'parent' && (
-            <form onSubmit={handleParentLogin} className="space-y-4 animate-in fade-in duration-200">
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    生徒ID（学校配布コード） <span className="text-amber-400">*</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={parentStudentCode}
-                      onChange={(e) => setParentStudentCode(e.target.value)}
-                      placeholder="例: A101 または TEST-001"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      required
-                    />
-                    <KeyRound className="h-4 w-4 text-slate-500 absolute right-3 top-3 pointer-events-none" />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1">
-                    照合キー または 生徒氏名 <span className="text-amber-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={parentVerificationCode}
-                    onChange={(e) => setParentVerificationCode(e.target.value)}
-                    placeholder="例: PASS01 または 生徒のフルネーム"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    required
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    ※学校配布の登録用紙に記載の照合キー、または生徒氏名を入力してください。
-                  </p>
-                </div>
+            <div className="space-y-5 animate-in fade-in duration-200 py-2">
+              <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-300 space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-sm text-amber-400">
+                  <ShieldCheck className="h-4 w-4 text-amber-400" />
+                  保護者専用セキュアログイン
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  不正アクセス防止のため、Googleアカウント認証が必須となっております。Googleログイン完了後、自動的にお子様情報の照合が行われます。
+                </p>
               </div>
 
               <button
-                type="submit"
+                type="button"
+                onClick={handleGoogleLogin}
                 disabled={isLoading}
-                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-95 text-slate-950 font-black rounded-2xl text-xs transition-all flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20 disabled:opacity-50"
+                className="w-full py-4 bg-white hover:bg-slate-100 active:scale-95 text-slate-900 font-black rounded-2xl text-sm sm:text-base transition-all flex items-center justify-center gap-3 shadow-xl shadow-white/5 border border-slate-200 disabled:opacity-50"
               >
                 {isLoading ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
+                  <>
+                    <RefreshCw className="h-5 w-5 animate-spin text-slate-700" />
+                    <span>Google認証中...</span>
+                  </>
                 ) : (
                   <>
-                    <span>保護者マイページへログイン</span>
-                    <ArrowRight className="h-4 w-4" />
+                    <svg className="h-5 w-5" viewBox="0 0 24 24">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                    </svg>
+                    <span>Googleアカウントでログイン</span>
+                    <ArrowRight className="h-4 w-4 text-slate-600" />
                   </>
                 )}
               </button>
 
-              {/* デモ・お試しクイック選択 */}
-              <div className="pt-3 border-t border-slate-850 space-y-2">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block text-center">
-                  または サンプル生徒でワンタップ体験:
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setParentStudentCode('A101')
-                      setParentVerificationCode('PASS01')
-                      loginAsParent('A101', 'PASS01').then(() => navigate('/parent/dashboard'))
-                    }}
-                    className="p-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 rounded-xl text-left transition-all active:scale-95"
-                  >
-                    <div className="text-xs font-bold text-white">山田 花子</div>
-                    <div className="text-[10px] text-slate-400 font-mono">ID: A101 (2名兄弟)</div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setParentStudentCode('TEST-001')
-                      setParentVerificationCode('PASS01')
-                      loginAsParent('TEST-001', 'PASS01').then(() => navigate('/parent/dashboard'))
-                    }}
-                    className="p-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 rounded-xl text-left transition-all active:scale-95"
-                  >
-                    <div className="text-xs font-bold text-white">佐藤 結衣</div>
-                    <div className="text-[10px] text-slate-400 font-mono">ID: TEST-001 (1年生)</div>
-                  </button>
-                </div>
-              </div>
-            </form>
+              <p className="text-[11px] text-center text-slate-500">
+                ※ 初めてご利用の方も、まず上記のGoogleログインを行ってください。ログイン後の画面で生徒照合を行います。
+              </p>
+            </div>
           )}
 
-          {/* ========================================================= */}
           {/* 2. ドライバーログインフォーム */}
-          {/* ========================================================= */}
           {activeTab === 'driver' && (
             <form onSubmit={handleDriverLogin} className="space-y-4 animate-in fade-in duration-200">
               <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-2xl p-4 text-xs text-emerald-300 flex items-start gap-2.5">
                 <Bus className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
-                  スクールバス乗務員専用の点呼・運行管理画面です。現場の乗務員端末からワンタップで即座にアクセスできます。
+                  スクールバス乗務員専用の点呼・運行管理画面です。現場端末からアクセスできます。
                 </div>
               </div>
 
@@ -411,15 +342,13 @@ export const Login: React.FC = () => {
             </form>
           )}
 
-          {/* ========================================================= */}
           {/* 3. 学校管理者ログインフォーム */}
-          {/* ========================================================= */}
           {activeTab === 'admin' && (
             <form onSubmit={handleAdminLogin} className="space-y-4 animate-in fade-in duration-200">
               <div className="bg-purple-500/10 border border-purple-500/20 rounded-2xl p-4 text-xs text-purple-300 flex items-start gap-2.5">
                 <ShieldCheck className="h-5 w-5 text-purple-400 shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
-                  学校管理者（教頭・運行主任）専用のダッシュボードです。ダイヤ調整、名簿管理、印刷、システム保守を行います。
+                  学校管理者（教頭・運行主任）専用のダッシュボードです。各シートデータの参照・管理を行います。
                 </div>
               </div>
 
@@ -460,9 +389,9 @@ export const Login: React.FC = () => {
 
         </div>
 
-        {/* フッター情報 */}
+        {/* フッター */}
         <div className="mt-6 text-center text-xs text-slate-500">
-          <p>© 2026 スクールバス運行管理システム</p>
+          <p>© 2026 スクールバス運行管理システム（スプレッドシート連携版）</p>
         </div>
 
       </div>

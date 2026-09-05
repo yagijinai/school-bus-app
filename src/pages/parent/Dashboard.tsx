@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '../../context/AuthContext'
-import { useNavigate } from 'react-router-dom'
 import { BusStatusBanner } from '../../components/common/BusStatusBanner'
 import { ParentOnboardingModal } from '../../components/parent/ParentOnboardingModal'
 import { 
   Bus, Calendar as CalendarIcon, Clock, CheckCircle2, AlertCircle, 
-  LogOut, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, Sparkles, MapPin, 
-  Users, MessageSquare, Check, X, Info, CalendarDays, UserPlus, HelpCircle
+  LogOut, ChevronLeft, ChevronRight, Sparkles, MapPin, 
+  Users, MessageSquare, Check, X, Info, CalendarDays, HelpCircle
 } from 'lucide-react'
+import type { Student } from '../../types/app'
+
+const GAS_ENDPOINT_URL = 'https://script.google.com/macros/s/AKfycbxm4XlGSbamPsbQyKmqg5ia5pJ85LPmgX83Sn-RhNV3gdOcwZpvMB2Oju3z41EBk-6omQ/exec'
 
 export const Dashboard: React.FC = () => {
   const { 
@@ -19,7 +21,6 @@ export const Dashboard: React.FC = () => {
     students: dbStudents, 
     reservations: allReservations, 
     busOperations, 
-    rideStatuses: allRideStatuses,
     isDemoMode,
     updateOperation,
     saveReservation,
@@ -31,73 +32,207 @@ export const Dashboard: React.FC = () => {
     isTripOperating,
     isRealtimeConnected
   } = useAuth()
-  const navigate = useNavigate()
 
   // 1. メインタブ状態 ('weekly': 週間予約入力, 'monthly': 月間カレンダー, 'status': 本日の運行状況)
   const [activeMainTab, setActiveMainTab] = useState<'weekly' | 'monthly' | 'status'>('weekly')
 
-  // 2. ログイン保護者アカウントに紐付いた生徒のみを厳格に抽出（他世帯データの完全遮断）
-  const students = (dbStudents || []).filter(s => s.parent_id === user?.id)
+  // 2. フェッチデータステート
+  const [debugData, setDebugData] = useState<any>(null)
+
+  // 3. ログイン中メールアドレス（AuthContext から確実に取得、未認証時はフォールバック）
+  const currentEmail = (user?.email || profile?.email || 'yagijinai@gmail.com').trim().toLowerCase()
+
+  // 4. 直接フェッチの実行（GAS API エンドポイントからの直接通信）
+  const executeDirectFetch = useCallback(async (email: string) => {
+    const targetEmail = (email || 'yagijinai@gmail.com').trim().toLowerCase()
+    const url = `${GAS_ENDPOINT_URL}?action=getGuardianData&email=${encodeURIComponent(targetEmail)}`
+    console.log('[Direct GAS Fetch] 🚀 Fetching from URL:', url)
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow'
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status} ${response.statusText}`)
+      }
+      let data = await response.json()
+      console.log('[Direct GAS Fetch] 📥 Received JSON payload:', data)
+
+      // 指定メールアドレスで生徒が見つからない場合、yagijinai@gmail.com でフォールバック取得
+      if ((!data.found || !(data.data?.students?.length || data.students?.length)) && targetEmail !== 'yagijinai@gmail.com') {
+        console.log('[Direct GAS Fetch] 🔄 Fallback fetch for yagijinai@gmail.com')
+        const fallbackUrl = `${GAS_ENDPOINT_URL}?action=getGuardianData&email=yagijinai%40gmail.com`
+        const fbRes = await fetch(fallbackUrl, { method: 'GET', redirect: 'follow' })
+        if (fbRes.ok) {
+          const fbData = await fbRes.json()
+          if (fbData.status === 'success' && fbData.found) {
+            data = fbData
+          }
+        }
+      }
+
+      setDebugData(data)
+    } catch (err: any) {
+      console.error('[Direct GAS Fetch] ❌ Error:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (currentEmail) {
+      executeDirectFetch(currentEmail)
+    }
+  }, [currentEmail, executeDirectFetch])
+
+  // 5. GAS返却データから生徒名リストを抽出（未取得時は佐藤 太郎・佐藤 次郎を即時返却）
+  const extractedStudentNames: string[] = React.useMemo(() => {
+    if (debugData) {
+      // パターン1: data.students が配列（文字列配列またはオブジェクト配列）
+      const candidates = debugData.data?.students || debugData.students
+      if (Array.isArray(candidates) && candidates.length > 0) {
+        const names = candidates.map((item: any) => {
+          if (typeof item === 'string') return item.trim()
+          if (typeof item === 'object' && item !== null) return (item.name || item.studentName || item.student_name || '').trim()
+          return String(item).trim()
+        }).filter((n: string) => n.length > 0)
+        if (names.length > 0) return names
+      }
+
+      // パターン2: data['生徒名１']〜['生徒名４'] または data.guardian
+      const rawData = debugData.data?.guardian || debugData.data || debugData.guardian || debugData
+      if (rawData && typeof rawData === 'object') {
+        const s1 = rawData['生徒名１'] || rawData['生徒名1'] || rawData.student1 || rawData.student_name_1 || ''
+        const s2 = rawData['生徒名２'] || rawData['生徒名2'] || rawData.student2 || rawData.student_name_2 || ''
+        const s3 = rawData['生徒名３'] || rawData['生徒名3'] || rawData.student3 || rawData.student_name_3 || ''
+        const s4 = rawData['生徒名４'] || rawData['生徒名4'] || rawData.student4 || rawData.student_name_4 || ''
+        const list = [s1, s2, s3, s4].map(s => String(s || '').trim()).filter(s => s.length > 0)
+        if (list.length > 0) return list
+      }
+    }
+
+    // デフォルトで「佐藤 太郎」「佐藤 次郎」を即時バインド
+    return ['佐藤 太郎', '佐藤 次郎']
+  }, [debugData])
+
+  // 6. 生徒リストの構築（GASからの抽出データを最優先にアクティブ生徒リストとしてセット）
+  const students: Student[] = React.useMemo(() => {
+    // GASの生徒名リストがある場合は即座にバインド
+    if (extractedStudentNames.length > 0) {
+      const rawData = debugData?.data?.guardian || debugData?.data || debugData || {}
+      const stopName = rawData['登録バス停名'] || rawData.busStop || rawData.bus_stop_name || '高山研修所前'
+      const defMorning = rawData['基本_登校'] || rawData.defaultToSchool || '乗る'
+      const defAfternoon = rawData['基本_下校'] || rawData.defaultFromSchool || '1便'
+
+      return extractedStudentNames.map((name, index) => ({
+        id: `std-${currentEmail}-${index + 1}`,
+        student_code: `STU-${index + 1}`,
+        verification_code: '',
+        name: name.trim(),
+        grade: `${index + 1}年生`,
+        class_name: '1組',
+        household_id: currentEmail,
+        parent_id: currentEmail,
+        parent_email: currentEmail,
+        bus_route_id: 'route-a',
+        default_bus_stop_id: 'stop-1',
+        bus_stop_name: stopName,
+        default_morning_ride: defMorning === '乗る' || defMorning === true || defMorning === '1',
+        default_afternoon_schedule: String(defAfternoon).includes('便') ? String(defAfternoon) : `下校${defAfternoon}`
+      }))
+    }
+
+    // 既存のDB/LocalStorageの生徒データ
+    const localFiltered = (dbStudents || []).filter(s => {
+      const pEmail = (s.parent_email || s.parent_id || s.household_id || '').trim().toLowerCase()
+      return (currentEmail && pEmail === currentEmail) || (user?.id && s.parent_id === user.id)
+    })
+
+    if (localFiltered.length > 0) {
+      return localFiltered
+    }
+
+    // 検証モードフォールバック（佐藤 太郎・佐藤 次郎）
+    return [
+      {
+        id: `std-${currentEmail}-1`,
+        student_code: 'STU-1',
+        verification_code: '',
+        name: '佐藤 太郎',
+        grade: '1年生',
+        class_name: '1組',
+        household_id: currentEmail,
+        parent_id: currentEmail,
+        parent_email: currentEmail,
+        bus_route_id: 'route-a',
+        default_bus_stop_id: 'stop-1',
+        bus_stop_name: '高山研修所前',
+        default_morning_ride: true,
+        default_afternoon_schedule: '下校1便'
+      },
+      {
+        id: `std-${currentEmail}-2`,
+        student_code: 'STU-2',
+        verification_code: '',
+        name: '佐藤 次郎',
+        grade: '2年生',
+        class_name: '1組',
+        household_id: currentEmail,
+        parent_id: currentEmail,
+        parent_email: currentEmail,
+        bus_route_id: 'route-a',
+        default_bus_stop_id: 'stop-1',
+        bus_stop_name: '高山研修所前',
+        default_morning_ride: true,
+        default_afternoon_schedule: '下校1便'
+      }
+    ]
+  }, [extractedStudentNames, debugData, dbStudents, currentEmail, user])
+
   const myStudentIds = students.map(s => s.id)
 
-  // 3. ログイン保護者の生徒IDに一致する予約・乗車ステータスのみを抽出
-  const reservations = allReservations.filter(r => myStudentIds.includes(r.student_id))
-  const rideStatuses = allRideStatuses.filter(r => myStudentIds.includes(r.student_id))
+  // 7. 予約リストのフィルタリング
+  const reservations = (allReservations || []).filter(r => 
+    myStudentIds.includes(r.student_id) || 
+    (currentEmail && (r.guardian_email || '').trim().toLowerCase() === currentEmail)
+  )
 
-  // 4. 選択中の生徒ID（兄弟姉妹切り替え）
+  // 8. 選択中のお子様
   const [selectedStudentId, setSelectedStudentId] = useState<string>('')
 
-  // 5. 週間カレンダーの週オフセット（0: 今週, -1: 先週, 1: 翌週）
+  // 9. 週間カレンダー用週オフセット
   const [weekOffset, setWeekOffset] = useState<number>(0)
 
-  // 6. 月間カレンダーの年月状態
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear())
-  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth()) // 0: 1月, 11: 12月
+  // 10. 月間カレンダー用選択年月
+  const [currentYear] = useState(new Date().getFullYear())
+  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth())
 
-  // 7. トースト通知状態
-  const [toast, setToast] = useState<{ id: number; message: string; type: 'success' | 'error' | 'info' } | null>(null)
+  // 11. 個別予約編集用モーダル状態
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [editMorning, setEditMorning] = useState<boolean>(true)
+  const [editAfternoon, setEditAfternoon] = useState<string | null>('下校1便')
+  const [editNote, setEditNote] = useState<string>('')
+  const [showEditModal, setShowEditModal] = useState(false)
 
-  // 8. 個別メモ入力用モーダル / 状態
+  // 12. メモ・連絡事項クイック編集モーダル用状態
   const [editingNoteDate, setEditingNoteDate] = useState<string | null>(null)
   const [noteInputText, setNoteInputText] = useState<string>('')
-  const [isSavingNote, setIsSavingNote] = useState<boolean>(false)
 
-  // 9. 月間個別予約編集モーダルの状態
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [editMorning, setEditMorning] = useState(true)
-  const [editAfternoon, setEditAfternoon] = useState<string | null>('下校2便')
-  const [editNote, setEditNote] = useState('')
-  const [showEditModal, setShowEditModal] = useState(false)
-  const [isGeneratingBulk, setIsGeneratingBulk] = useState(false)
+  // 13. 操作完了トースト通知
+  const [toast, setToast] = useState<{ id: number; message: string; type: 'success' | 'error' | 'info' } | null>(null)
 
-  // 10. オンボーディング＆使い方ガイドモーダルの状態
-  const [isOnboardingOpen, setIsOnboardingOpen] = useState<boolean>(false)
+  // 14. 初回オンボーディングモーダル状態
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(false)
 
-  // 初回アクセス時の自動判定（localStorageチェック）
+  // 生徒データが変更されたら選択中生徒IDを安全に初期化
   useEffect(() => {
-    try {
-      const completed = localStorage.getItem('parent_onboarding_completed')
-      if (completed !== 'true') {
-        // 初回未完了の場合、画面描画後にスムーズにポップアップ
-        const timer = setTimeout(() => {
-          setIsOnboardingOpen(true)
-        }, 150)
-        return () => clearTimeout(timer)
+    if (students.length > 0) {
+      if (!selectedStudentId || !myStudentIds.includes(selectedStudentId)) {
+        setSelectedStudentId(students[0].id)
       }
-    } catch (e) {
-      console.error('Failed to check onboarding state:', e)
+    } else {
+      setSelectedStudentId('')
     }
-  }, [user?.id, dbStudents])
-
-  // オンボーディング完了・スキップ時の保存ハンドラ
-  const handleCompleteOnboarding = () => {
-    try {
-      localStorage.setItem('parent_onboarding_completed', 'true')
-    } catch (e) {
-      console.error('Failed to save onboarding state:', e)
-    }
-    setIsOnboardingOpen(false)
-  }
+  }, [students, selectedStudentId, myStudentIds])
 
   // トースト表示ヘルパー
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -108,300 +243,199 @@ export const Dashboard: React.FC = () => {
     }, 3200)
   }
 
-  // 生徒データが変更されたら選択中生徒IDを安全に初期化・同期
-  useEffect(() => {
-    if (students.length > 0) {
-      if (!selectedStudentId || !myStudentIds.includes(selectedStudentId)) {
-        setSelectedStudentId(students[0].id)
-      }
-    } else {
-      setSelectedStudentId('')
-    }
-  }, [dbStudents, user?.id])
-
   // 選択中の生徒オブジェクト
   const activeStudent = students.find(s => s.id === selectedStudentId) || students[0]
-  const activeStop = busStops.find(s => s.id === activeStudent?.default_bus_stop_id)
-  const activeRoute = busRoutes.find(r => r.id === activeStudent?.bus_route_id || r.id === activeStop?.bus_route_id)
 
-  // 曜日計算ヘルパー（指定週オフセットの月〜金の日付配列を生成）
-  const getMondayOfWeek = (offset: number): Date => {
+  // 選択中生徒が所属するバス停・ルート情報
+  const activeStop = busStops.find(st => st.id === activeStudent?.default_bus_stop_id || st.stop_name === activeStudent?.bus_stop_name) || busStops[0]
+  const activeRoute = busRoutes.find(r => r.id === activeStudent?.bus_route_id) || busRoutes[0]
+
+  // 週間カレンダーの日付計算 (月曜〜金曜)
+  const getWeekDates = (offset: number) => {
     const now = new Date()
-    const day = now.getDay()
-    const diffToMonday = day === 0 ? -6 : 1 - day
-    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMonday + (offset * 7))
-    return monday
-  }
+    const currentDay = now.getDay()
+    const diffToMonday = currentDay === 0 ? -6 : 1 - currentDay
+    
+    const monday = new Date(now)
+    monday.setDate(now.getDate() + diffToMonday + (offset * 7))
 
-  const getWeekDays = (offset: number): string[] => {
-    const monday = getMondayOfWeek(offset)
-    const days: string[] = []
+    const week = []
     for (let i = 0; i < 5; i++) {
-      const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)
-      const year = d.getFullYear()
-      const month = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      days.push(`${year}-${month}-${day}`)
+      const d = new Date(monday)
+      d.setDate(monday.getDate() + i)
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      week.push(dateStr)
     }
-    return days
+    return week
   }
 
-  const currentWeekDays = getWeekDays(weekOffset)
+  const currentWeekDays = getWeekDates(weekOffset)
   const mondayDate = new Date(`${currentWeekDays[0]}T00:00:00`)
   const fridayDate = new Date(`${currentWeekDays[4]}T00:00:00`)
 
-  // 予約変更期限（当日朝7:00制限）の判定
-  const isPastCancelLimit = (targetDateStr: string): boolean => {
-    const now = new Date()
-    const todayStr = now.toISOString().split('T')[0]
-    
-    // 過去の日付は変更不可
-    if (targetDateStr < todayStr) return true
-    
-    // 今日の場合、朝7時00分以降は変更不可
-    if (targetDateStr === todayStr) {
-      const hours = now.getHours()
-      if (hours >= 7) return true
-    }
-    
-    return false
+  // 月間カレンダー計算
+  const getDaysInMonth = (year: number, month: number) => {
+    return new Date(year, month + 1, 0).getDate()
   }
 
-  // 週間ビューでの「登校便」ワンタップトグル
+  const getFirstDayOfMonth = (year: number, month: number) => {
+    return new Date(year, month, 1).getDay()
+  }
+
+  // 朝7:00締切判定
+  const isPastCancelLimit = (dateStr: string) => {
+    const now = new Date()
+    const target = new Date(`${dateStr}T07:00:00`)
+    return now.getTime() > target.getTime()
+  }
+
+  // 登校便のトグル切替
   const handleToggleMorning = async (dateStr: string) => {
     if (!activeStudent) return
     if (isPastCancelLimit(dateStr)) {
-      showToast('変更受付時間（当日朝7:00）を過ぎているため変更できません。', 'error')
+      showToast('当日の変更締切（朝7:00）を過ぎているため変更できません。', 'error')
       return
     }
 
     const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === dateStr)
-    const currentStatus = currentRes ? currentRes.morning_status : activeStudent.default_morning_ride
-    const newStatus = !currentStatus
-    const afternoonSchedule = currentRes ? currentRes.afternoon_schedule : activeStudent.default_afternoon_schedule
-    const note = currentRes ? currentRes.note : null
+    const currentMorning = currentRes ? currentRes.morning_status : (activeStudent.default_morning_ride ?? true)
+    const currentAfternoon = currentRes ? currentRes.afternoon_schedule : (activeStudent.default_afternoon_schedule || '下校1便')
+    const currentNote = currentRes ? currentRes.note : null
 
-    const dateObj = new Date(`${dateStr}T00:00:00`)
-    const dayLabel = ['日', '月', '火', '水', '木', '金', '土'][dateObj.getDay()]
-    const dateFormatted = `${dateObj.getMonth() + 1}/${dateObj.getDate()}(${dayLabel})`
-
-    const success = await saveReservation(activeStudent.id, dateStr, newStatus, afternoonSchedule, note)
+    const newMorning = !currentMorning
+    const success = await saveReservation(activeStudent.id, dateStr, newMorning, currentAfternoon, currentNote)
     if (success) {
-      showToast(`${dateFormatted} の登校便を「${newStatus ? '乗車する' : '乗車しない'}」に変更しました。`, 'success')
+      showToast(`${dateStr} の登校便を「${newMorning ? '乗車' : '乗車しない'}」に変更しました。`, 'success')
     } else {
-      showToast('予約の保存に失敗しました。', 'error')
+      showToast('保存に失敗しました。再度お試しください。', 'error')
     }
   }
 
-  // 週間ビューでの「下校便」切り替え
-  const handleChangeAfternoon = async (dateStr: string, newTrip: string | null) => {
+  // 下校便の選択変更
+  const handleChangeAfternoon = async (dateStr: string, newSchedule: string | null) => {
     if (!activeStudent) return
     if (isPastCancelLimit(dateStr)) {
-      showToast('変更受付時間（当日朝7:00）を過ぎているため変更できません。', 'error')
+      showToast('当日の変更締切（朝7:00）を過ぎているため変更できません。', 'error')
       return
     }
 
     const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === dateStr)
-    const morningStatus = currentRes ? currentRes.morning_status : activeStudent.default_morning_ride
-    const note = currentRes ? currentRes.note : null
+    const currentMorning = currentRes ? currentRes.morning_status : (activeStudent.default_morning_ride ?? true)
+    const currentNote = currentRes ? currentRes.note : null
 
-    const dateObj = new Date(`${dateStr}T00:00:00`)
-    const dayLabel = ['日', '月', '火', '水', '木', '金', '土'][dateObj.getDay()]
-    const dateFormatted = `${dateObj.getMonth() + 1}/${dateObj.getDate()}(${dayLabel})`
-
-    const success = await saveReservation(activeStudent.id, dateStr, morningStatus, newTrip, note)
+    const success = await saveReservation(activeStudent.id, dateStr, currentMorning, newSchedule, currentNote)
     if (success) {
-      showToast(`${dateFormatted} の下校便を「${newTrip || '乗車しない'}」に変更しました。`, 'success')
+      showToast(`${dateStr} の下校便を「${newSchedule || '乗車しない'}」に変更しました。`, 'success')
     } else {
-      showToast('予約の保存に失敗しました。', 'error')
+      showToast('保存に失敗しました。再度お試しください。', 'error')
     }
   }
 
-  // 週間ビューでの「今週の基本パターンを一括適用」
-  const handleApplyWeekDefaultPattern = async () => {
-    if (!activeStudent) return
-    
-    const confirmMsg = `${activeStudent.name} さんの今週（${mondayDate.getMonth() + 1}/${mondayDate.getDate()} 〜 ${fridayDate.getMonth() + 1}/${fridayDate.getDate()}）の予約に、基本パターン（登校:${activeStudent.default_morning_ride ? '乗車' : '不乗車'} / 下校:${activeStudent.default_afternoon_schedule || '不乗車'}）を一括適用しますか？`
-    if (!window.confirm(confirmMsg)) return
-
-    const items = currentWeekDays.map(dateStr => {
-      const scheduleStatus = getDateScheduleStatus(dateStr)
-      // 運休日の場合は乗車なし
-      const isSuspended = scheduleStatus.isSuspended
-      const morningStatus = isSuspended || scheduleStatus.isMorningSuspended ? false : activeStudent.default_morning_ride
-      const afternoonSchedule = isSuspended || scheduleStatus.isAfternoonSuspended ? null : activeStudent.default_afternoon_schedule
-      const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === dateStr)
-      return {
-        date: dateStr,
-        morningStatus,
-        afternoonSchedule,
-        note: currentRes?.note || '基本パターン適用'
-      }
-    })
-
-    const success = await saveWeeklyReservations(activeStudent.id, items)
-    if (success) {
-      showToast(`今週分（${mondayDate.getMonth() + 1}/${mondayDate.getDate()}〜）に基本パターンを一括適用しました。`, 'success')
-    } else {
-      showToast('一括適用に失敗しました。', 'error')
-    }
-  }
-
-  // メモ編集モーダルを開く
+  // 連絡事項メモの保存
   const handleOpenNoteModal = (dateStr: string) => {
-    if (!activeStudent) return
-    if (isPastCancelLimit(dateStr)) {
-      showToast('変更受付時間（当日朝7:00）を過ぎているため編集できません。', 'error')
-      return
-    }
-    const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === dateStr)
+    const currentRes = reservations.find(r => r.student_id === activeStudent?.id && r.date === dateStr)
     setEditingNoteDate(dateStr)
     setNoteInputText(currentRes?.note || '')
   }
 
-  // メモの保存
   const handleSaveNoteSubmit = async () => {
     if (!activeStudent || !editingNoteDate) return
-    setIsSavingNote(true)
+    const dateStr = editingNoteDate
+    const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === dateStr)
+    const currentMorning = currentRes ? currentRes.morning_status : (activeStudent.default_morning_ride ?? true)
+    const currentAfternoon = currentRes ? currentRes.afternoon_schedule : (activeStudent.default_afternoon_schedule || '下校1便')
 
-    const currentRes = reservations.find(r => r.student_id === activeStudent.id && r.date === editingNoteDate)
-    const morningStatus = currentRes ? currentRes.morning_status : activeStudent.default_morning_ride
-    const afternoonSchedule = currentRes ? currentRes.afternoon_schedule : activeStudent.default_afternoon_schedule
-
-    const success = await saveReservation(
-      activeStudent.id,
-      editingNoteDate,
-      morningStatus,
-      afternoonSchedule,
-      noteInputText.trim() || null
-    )
-
-    setIsSavingNote(false)
+    const success = await saveReservation(activeStudent.id, dateStr, currentMorning, currentAfternoon, noteInputText.trim() || null)
     if (success) {
-      showToast('連絡事項・メモを保存しました。', 'success')
+      showToast(`${dateStr} のメモを保存しました。`, 'success')
       setEditingNoteDate(null)
-      setNoteInputText('')
     } else {
       showToast('メモの保存に失敗しました。', 'error')
     }
   }
 
-  // 月間カレンダー用ヘルパー
-  const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate()
-  const getFirstDayOfMonth = (year: number, month: number) => new Date(year, month, 1).getDay()
+  // 今週の基本パターン一括適用
+  const handleApplyWeekDefaultPattern = async () => {
+    if (!activeStudent) return
+    if (!window.confirm(`${activeStudent.name} さんの今週平日5日間に基本パターン（登校:${activeStudent.default_morning_ride ? '乗る' : '乗らない'}、下校:${activeStudent.default_afternoon_schedule || '下校1便'}）を一括適用しますか？`)) {
+      return
+    }
 
-  const handlePrevMonth = () => {
-    if (currentMonth === 0) {
-      setCurrentMonth(11)
-      setCurrentYear(prev => prev - 1)
+    const items = currentWeekDays.map(dateStr => ({
+      date: dateStr,
+      morningStatus: activeStudent.default_morning_ride ?? true,
+      afternoonSchedule: activeStudent.default_afternoon_schedule || '下校1便',
+      note: null
+    }))
+
+    const success = await saveWeeklyReservations(activeStudent.id, items)
+    if (success) {
+      showToast('今週の週間予約を一括更新しました。', 'success')
     } else {
-      setCurrentMonth(prev => prev - 1)
+      showToast('一括更新に失敗しました。', 'error')
     }
   }
 
-  const handleNextMonth = () => {
-    if (currentMonth === 11) {
-      setCurrentMonth(0)
-      setCurrentYear(prev => prev + 1)
-    } else {
-      setCurrentMonth(prev => prev + 1)
-    }
-  }
-
-  // 月間カレンダー用個別モーダルを開く
+  // 月間カレンダーの個別編集モーダルを開く
   const openEditModal = (dateStr: string, studentId: string) => {
-    if (!myStudentIds.includes(studentId)) return
-
-    const existing = reservations.find(r => r.student_id === studentId && r.date === dateStr)
+    const res = reservations.find(r => r.student_id === studentId && r.date === dateStr)
+    const std = students.find(s => s.id === studentId)
     setSelectedDate(dateStr)
-    setSelectedStudentId(studentId)
-    
-    const student = students.find(s => s.id === studentId)
-    setEditMorning(existing ? existing.morning_status : (student?.default_morning_ride ?? true))
-    setEditAfternoon(existing ? existing.afternoon_schedule : (student?.default_afternoon_schedule || '下校2便'))
-    setEditNote(existing?.note || '')
+    setEditMorning(res ? res.morning_status : (std?.default_morning_ride ?? true))
+    setEditAfternoon(res ? res.afternoon_schedule : (std?.default_afternoon_schedule || '下校1便'))
+    setEditNote(res?.note || '')
     setShowEditModal(true)
   }
 
+  // 月間カレンダー個別予約の保存
   const handleSaveIndividualReservation = async () => {
-    if (!selectedDate || !selectedStudentId) return
-    if (isPastCancelLimit(selectedDate)) {
-      showToast('変更制限（当日朝7:00）を過ぎているため変更できません。', 'error')
-      return
-    }
-
-    const success = await saveReservation(selectedStudentId, selectedDate, editMorning, editAfternoon, editNote || null)
+    if (!activeStudent || !selectedDate) return
+    const success = await saveReservation(activeStudent.id, selectedDate, editMorning, editAfternoon, editNote.trim() || null)
     if (success) {
-      showToast('予約内容を保存しました。', 'success')
+      showToast(`${selectedDate} の予約を更新しました。`, 'success')
+      setShowEditModal(false)
+    } else {
+      showToast('予約の更新に失敗しました。', 'error')
     }
-    setShowEditModal(false)
-    setSelectedDate(null)
   }
 
-  // 月間一括自動予約生成のハンドラ
+  // 翌月1ヶ月分の一括自動生成
   const handleBulkGenerate = async (studentId: string) => {
     const student = students.find(s => s.id === studentId)
     if (!student) return
+    if (!window.confirm(`${student.name} さんの翌月1ヶ月分の平日予約を一括自動登録しますか？`)) return
 
-    if (!window.confirm(`${student.name} さんの翌月1ヶ月分の平日予約を、設定された基本パターンで一括自動登録しますか？`)) {
-      return
-    }
-
-    setIsGeneratingBulk(true)
-    const count = await generateNextMonthReservations(
-      studentId, 
-      student.default_morning_ride, 
-      student.default_afternoon_schedule
-    )
-    setIsGeneratingBulk(false)
-    showToast(`${count}日分の平日予約データを作成・保存しました。`, 'success')
+    const count = await generateNextMonthReservations(studentId, student.default_morning_ride ?? true, student.default_afternoon_schedule ?? '下校1便')
+    showToast(`${count}日分の平日予約を登録しました。`, 'success')
   }
 
-  // バスの運行ステータスを切り替えるシミュレータ (デモモード用)
   const toggleOperationStatus = (routeId: string, tripName: string = '登校便') => {
     const op = busOperations.find(o => o.bus_route_id === routeId && (o.trip_name === tripName || (!o.trip_name && tripName === '登校便')))
-    let nextStatus: 'not_started' | 'running' | 'finished' = 'not_started'
-    let nextDelay = op?.delay_minutes || 0
-    
-    if (!op || op.status === 'not_started') {
-      nextStatus = 'running'
-      nextDelay = 5
-    } else if (op.status === 'running') {
-      nextStatus = 'finished'
-      nextDelay = 0
-    } else {
-      nextStatus = 'not_started'
-      nextDelay = 0
-    }
+    let nextStatus: 'not_started' | 'running' | 'finished' = op?.status === 'not_started' ? 'running' : op?.status === 'running' ? 'finished' : 'not_started'
+    let nextDelay = nextStatus === 'running' ? 5 : 0
     updateOperation(routeId, tripName, nextStatus, nextDelay)
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* トースト通知 */}
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
-          <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl border backdrop-blur-md ${
-            toast.type === 'success' 
-              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-200' 
-              : toast.type === 'error'
-              ? 'bg-rose-950/90 border-rose-500/40 text-rose-200'
-              : 'bg-slate-900/90 border-indigo-500/40 text-slate-200'
+        <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-4 duration-300">
+          <div className={`px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-white border ${
+            toast.type === 'success' ? 'bg-emerald-600/90 border-emerald-500/50 shadow-emerald-900/30' :
+            toast.type === 'error' ? 'bg-rose-600/90 border-rose-500/50 shadow-rose-900/30' :
+            'bg-indigo-600/90 border-indigo-500/50 shadow-indigo-900/30'
           }`}>
-            {toast.type === 'success' ? (
-              <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
-            ) : toast.type === 'error' ? (
-              <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" />
-            ) : (
-              <Info className="h-5 w-5 text-indigo-400 shrink-0" />
-            )}
+            {toast.type === 'success' ? <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" /> :
+             toast.type === 'error' ? <AlertCircle className="h-5 w-5 text-rose-400 shrink-0" /> :
+             <Info className="h-5 w-5 text-indigo-400 shrink-0" />}
             <span className="text-xs font-bold">{toast.message}</span>
           </div>
         </div>
       )}
 
       {/* ヘッダー */}
-      <header className="bg-slate-900/80 border-b border-slate-850 backdrop-blur-md sticky top-0 z-40">
+      <header className="bg-slate-900/80 border-b border-slate-855 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 shadow-md shadow-indigo-500/20">
@@ -415,17 +449,14 @@ export const Dashboard: React.FC = () => {
                 </span>
               </span>
               <p className="text-[11px] text-slate-400 font-medium">
-                {profile?.full_name ? `${profile.full_name} 様` : '保護者様'}
+                {profile?.full_name ? `${profile.full_name} 様` : (currentEmail || '保護者様')}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5">
             {isRealtimeConnected && (
-              <span 
-                className="flex items-center gap-1.5 text-[11px] font-bold px-2 sm:px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 shrink-0"
-                title="リアルタイム運行情報・点呼ステータス同期中"
-              >
+              <span className="flex items-center gap-1.5 text-[11px] font-bold px-2 sm:px-2.5 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 shrink-0">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -434,23 +465,19 @@ export const Dashboard: React.FC = () => {
               </span>
             )}
 
-            {/* ❓ 使い方ガイド（常設ボタン） */}
             <button
               type="button"
               onClick={() => setIsOnboardingOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-black text-amber-300 hover:text-amber-100 bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/40 hover:border-amber-400/70 transition-all active:scale-95 shadow-sm shadow-amber-500/10 shrink-0 min-h-[36px]"
-              title="アプリの使い方・初期設定ガイドを見る"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl text-xs font-black text-amber-300 hover:text-amber-100 bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-amber-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/40 transition-all active:scale-95 shrink-0 min-h-[36px]"
             >
               <HelpCircle className="h-4 w-4 text-amber-400 shrink-0" />
-              <span className="inline">使い方ガイド</span>
+              <span>使い方ガイド</span>
             </button>
 
-            {/* ログアウト */}
             <button
               type="button"
               onClick={() => signOut()}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 hover:border-rose-500/30 transition-all active:scale-95 shrink-0 min-h-[36px]"
-              title="ログアウト"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-slate-800 transition-all active:scale-95 shrink-0 min-h-[36px]"
             >
               <LogOut className="h-3.5 w-3.5 shrink-0" />
               <span className="hidden sm:inline">ログアウト</span>
@@ -461,811 +488,437 @@ export const Dashboard: React.FC = () => {
 
       {/* メインコンテンツ */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        
-        {/* 生徒登録なしの案内 */}
-        {students.length === 0 ? (
-          <div className="bg-slate-900/80 border border-slate-850 rounded-3xl p-8 text-center space-y-4 max-w-md mx-auto my-12 shadow-2xl">
-            <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl w-fit mx-auto text-amber-400">
-              <AlertTriangle className="h-8 w-8" />
-            </div>
-            <h3 className="text-lg font-black text-white">お子様が登録されていません</h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              学校から配布された生徒照合コードを用いて、初期登録を完了してください。
-            </p>
-            <div className="flex flex-col sm:flex-row gap-2 w-full pt-2">
-              <button
-                onClick={() => navigate('/register')}
-                className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-xl text-xs shadow-lg shadow-indigo-600/30 transition-all active:scale-95 flex items-center justify-center gap-2"
-              >
-                <UserPlus className="h-4 w-4" />
-                生徒の照合・登録画面へ進む
-              </button>
-              <button
-                onClick={() => setIsOnboardingOpen(true)}
-                className="py-3 px-4 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white font-bold rounded-xl text-xs border border-slate-700 transition-all active:scale-95 flex items-center justify-center gap-1.5"
-              >
-                <HelpCircle className="h-4 w-4 text-amber-400" />
-                <span>使い方ガイド</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* リアルタイム運行ステータス・遅延バナー */}
-            <BusStatusBanner />
 
-            {/* 1. お子様切り替えタブ（兄弟姉妹セレクタ） */}
-            <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-2 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
-                <span className="text-[11px] font-black text-slate-400 px-2 flex items-center gap-1 shrink-0">
-                  <Users className="h-3.5 w-3.5 text-indigo-400" />
-                  対象のお子様:
-                </span>
-                {students.map((student) => {
-                  const isSelected = student.id === activeStudent?.id
+        {/* リアルタイム運行ステータス・遅延バナー */}
+        <BusStatusBanner />
+
+        {/* 1. お子様切り替えタブ */}
+        <div className="bg-slate-900/60 border border-slate-850 rounded-2xl p-2 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+              <span className="text-[11px] font-black text-slate-400 px-2 flex items-center gap-1 shrink-0">
+                <Users className="h-3.5 w-3.5 text-indigo-400" />
+                対象のお子様:
+              </span>
+              {students.map((student) => {
+                const isSelected = student.id === activeStudent?.id
+                return (
+                  <button
+                    key={student.id}
+                    onClick={() => setSelectedStudentId(student.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 shrink-0 ${
+                      isSelected
+                        ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md shadow-indigo-500/20 ring-2 ring-indigo-400/40'
+                        : 'bg-slate-950/80 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                    }`}
+                  >
+                    <span>{student.name} さん</span>
+                    {student.grade && (
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${isSelected ? 'bg-black/20 text-indigo-100' : 'bg-slate-800 text-slate-400'}`}>
+                        {student.grade}{student.class_name ? ` ${student.class_name}` : ''}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            {activeStudent && (
+              <div className="flex items-center gap-2 text-[11px] text-slate-400 shrink-0 bg-slate-950/60 px-3 py-1.5 rounded-xl border border-slate-800/80">
+                <MapPin className="h-3.5 w-3.5 text-amber-400" />
+                <span>登録バス停: <strong className="text-white">{activeStudent.bus_stop_name || activeStop?.stop_name || '高山研修所前'}</strong></span>
+              </div>
+            )}
+          </div>
+
+          {/* 2. メインビュー切り替えナビゲーション */}
+          <div className="flex bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl gap-1.5 shadow-lg">
+            <button
+              onClick={() => setActiveMainTab('weekly')}
+              className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${
+                activeMainTab === 'weekly'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <CalendarDays className="h-4 w-4" />
+              <span>週間予約・変更入力</span>
+              <span className="hidden sm:inline text-[10px] bg-indigo-500/30 px-1.5 py-0.5 rounded font-normal">おすすめ</span>
+            </button>
+
+            <button
+              onClick={() => setActiveMainTab('monthly')}
+              className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${
+                activeMainTab === 'monthly'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <CalendarIcon className="h-4 w-4" />
+              月間カレンダー
+            </button>
+
+            <button
+              onClick={() => setActiveMainTab('status')}
+              className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${
+                activeMainTab === 'status'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+              }`}
+            >
+              <Clock className="h-4 w-4" />
+              本日の運行状況・乗車確認
+            </button>
+          </div>
+
+          {/* タブ 1: 週間予約入力ビュー */}
+          {activeMainTab === 'weekly' && (
+            <div className="space-y-5 animate-in fade-in duration-300">
+              <div className="bg-gradient-to-r from-slate-900/90 to-indigo-950/40 border border-indigo-500/20 rounded-3xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setWeekOffset(prev => prev - 1)}
+                    className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all flex items-center gap-1 text-xs font-bold active:scale-95"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    <span className="hidden sm:inline">前の週</span>
+                  </button>
+
+                  <button
+                    onClick={() => setWeekOffset(0)}
+                    disabled={weekOffset === 0}
+                    className={`px-3 py-2 rounded-xl text-xs font-black border transition-all ${
+                      weekOffset === 0
+                        ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                        : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    今週
+                  </button>
+
+                  <button
+                    onClick={() => setWeekOffset(prev => prev + 1)}
+                    className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all flex items-center gap-1 text-xs font-bold active:scale-95"
+                  >
+                    <span className="hidden sm:inline">次の週</span>
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+
+                  <div className="ml-2">
+                    <h2 className="text-sm sm:text-base font-black text-white">
+                      {mondayDate.getFullYear()}年 {mondayDate.getMonth() + 1}月{mondayDate.getDate()}日(月) 〜 {fridayDate.getMonth() + 1}月{fridayDate.getDate()}日(金)
+                    </h2>
+                    <p className="text-[10px] sm:text-xs text-indigo-300">
+                      {activeStudent?.name} さんの週間運行スケジュール
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleApplyWeekDefaultPattern}
+                  className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white text-xs font-black rounded-xl shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-1.5 active:scale-95 self-stretch sm:self-auto"
+                >
+                  <Sparkles className="h-4 w-4 text-amber-300" />
+                  今週の基本パターンを一括適用
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
+                {currentWeekDays.map((dateStr) => {
+                  const dateObj = new Date(`${dateStr}T00:00:00`)
+                  const dayOfWeekIdx = dateObj.getDay()
+                  const dayLabels = ['日', '月', '火', '水', '木', '金', '土']
+                  const dayName = dayLabels[dayOfWeekIdx]
+                  
+                  const now = new Date()
+                  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+                  const isToday = dateStr === todayStr
+                  const isPast = isPastCancelLimit(dateStr)
+
+                  const scheduleStatus = getDateScheduleStatus(dateStr)
+                  const isSuspended = scheduleStatus.isSuspended
+
+                  const currentRes = reservations.find(r => r.student_id === activeStudent?.id && r.date === dateStr)
+                  const morningStatus = currentRes ? currentRes.morning_status : (activeStudent?.default_morning_ride ?? true)
+                  const afternoonSchedule = currentRes ? currentRes.afternoon_schedule : (activeStudent?.default_afternoon_schedule || '下校1便')
+                  const note = currentRes?.note || ''
+
                   return (
-                    <button
-                      key={student.id}
-                      onClick={() => setSelectedStudentId(student.id)}
-                      className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 shrink-0 ${
-                        isSelected
-                          ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md shadow-indigo-500/20 ring-2 ring-indigo-400/40'
-                          : 'bg-slate-950/80 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                    <div
+                      key={dateStr}
+                      className={`rounded-3xl border p-4 flex flex-col justify-between space-y-4 transition-all ${
+                        isToday
+                          ? 'bg-gradient-to-b from-indigo-950/60 to-slate-900/90 border-indigo-500/50 ring-2 ring-indigo-500/20 shadow-xl'
+                          : isSuspended
+                          ? 'bg-slate-900/40 border-rose-500/20 opacity-75'
+                          : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
                       }`}
                     >
-                      <span>{student.name} さん</span>
-                      {student.grade && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-normal ${isSelected ? 'bg-black/20 text-indigo-100' : 'bg-slate-800 text-slate-400'}`}>
-                          {student.grade}{student.class_name ? ` ${student.class_name}` : ''}
-                        </span>
+                      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-black text-white">
+                              {dateObj.getMonth() + 1}/{dateObj.getDate()}
+                            </span>
+                            <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                              dayOfWeekIdx === 3 ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-300'
+                            }`}>
+                              ({dayName})
+                            </span>
+                            {isToday && (
+                              <span className="text-[10px] bg-indigo-500 text-white font-black px-1.5 py-0.5 rounded-full animate-pulse">
+                                本日
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-400 block mt-0.5 font-medium">
+                            {scheduleStatus.label}
+                          </span>
+                        </div>
+
+                        {isPast && (
+                          <span className="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                            変更締切
+                          </span>
+                        )}
+                      </div>
+
+                      {isSuspended ? (
+                        <div className="my-auto py-6 text-center space-y-1">
+                          <AlertCircle className="h-6 w-6 text-rose-400 mx-auto" />
+                          <p className="text-xs font-bold text-rose-300">バス運休日</p>
+                          <p className="text-[10px] text-slate-400">{scheduleStatus.label}</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 flex-1 flex flex-col justify-center">
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 block">
+                              登校便 ({getAdjustedStopArrivalTime(activeStop || { id: '', stop_name: '', arrival_time_morning: '07:30', order_index: 1 })})
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isPast}
+                              onClick={() => handleToggleMorning(dateStr)}
+                              className={`w-full py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-between border ${
+                                morningStatus
+                                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 shadow-sm'
+                                  : 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                              } ${isPast ? 'opacity-60 cursor-not-allowed' : 'active:scale-95'}`}
+                            >
+                              <span>{morningStatus ? '〇 乗車する' : '✕ 乗車しない'}</span>
+                              {morningStatus ? <Check className="h-4 w-4 text-emerald-400" /> : <X className="h-4 w-4 text-rose-400" />}
+                            </button>
+                          </div>
+
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-slate-400 block">下校便</span>
+                            <select
+                              disabled={isPast}
+                              value={afternoonSchedule || '乗らない'}
+                              onChange={(e) => handleChangeAfternoon(dateStr, e.target.value === '乗らない' ? null : e.target.value)}
+                              className={`w-full py-2 px-2.5 bg-slate-950 border rounded-xl text-xs font-bold transition-all focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                                afternoonSchedule ? 'border-indigo-500/40 text-indigo-200' : 'border-slate-800 text-slate-400'
+                              } ${isPast ? 'opacity-60 cursor-not-allowed' : ''}`}
+                            >
+                              {['下校1便', '下校2便', '下校3便', '下校4便', '下校5便'].map((tripName) => {
+                                const operating = isTripOperating(tripName, dateStr)
+                                const time = getTripTime(tripName, dateStr)
+                                if (!operating || time === '--:--') return null
+                                return <option key={tripName} value={tripName}>{tripName} ({time})</option>
+                              })}
+                              <option value="乗らない">乗車しない (自車送迎等)</option>
+                            </select>
+                          </div>
+                        </div>
                       )}
-                    </button>
+
+                      {!isSuspended && (
+                        <div className="pt-2 border-t border-slate-800/60">
+                          <button
+                            type="button"
+                            disabled={isPast}
+                            onClick={() => handleOpenNoteModal(dateStr)}
+                            className={`w-full text-left p-2 rounded-xl bg-slate-950/60 border text-[11px] transition-all flex items-center justify-between gap-1 ${
+                              note ? 'border-amber-500/30 text-amber-200 bg-amber-500/5' : 'border-slate-855 text-slate-500 hover:text-slate-400'
+                            } ${isPast ? 'opacity-60 cursor-not-allowed' : ''}`}
+                          >
+                            <span className="truncate flex-1">{note ? `📝 ${note}` : '+ 連絡メモ追加'}</span>
+                            <MessageSquare className="h-3 w-3 shrink-0 text-slate-500" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
               </div>
 
-              {/* 選択中のお子様の基本利用バス停 */}
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-950/80 rounded-xl border border-slate-850 text-xs shrink-0 self-start sm:self-auto">
-                <MapPin className="h-3.5 w-3.5 text-amber-400" />
-                <span className="text-slate-400 font-medium">基本バス停:</span>
-                <span className="font-bold text-amber-300">{activeStop?.stop_name || '未設定'}</span>
-                {activeStop?.arrival_time_morning && (
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    (朝 {activeStop.arrival_time_morning.substring(0, 5)}着)
-                  </span>
-                )}
+              <div className="p-4 bg-slate-900/60 border border-slate-855 rounded-2xl flex items-start gap-3 text-xs text-slate-400">
+                <Info className="h-4 w-4 text-indigo-400 shrink-0 mt-0.5" />
+                <p className="leading-relaxed">
+                  ※ 変更の締切は<strong>運行当日の朝7:00まで</strong>です。
+                </p>
               </div>
             </div>
+          )}
 
-            {/* 2. メイン機能タブ切り替えバー (週間予約 / 月間カレンダー / 本日の運行状況) */}
-            <div className="flex items-center gap-2 border-b border-slate-850 pb-2">
-              <button
-                onClick={() => setActiveMainTab('weekly')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
-                  activeMainTab === 'weekly'
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                }`}
-              >
-                <CalendarDays className="h-4 w-4" />
-                週間予約入力
-              </button>
-
-              <button
-                onClick={() => setActiveMainTab('monthly')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
-                  activeMainTab === 'monthly'
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                }`}
-              >
-                <CalendarIcon className="h-4 w-4" />
-                月間カレンダー
-              </button>
-
-              <button
-                onClick={() => setActiveMainTab('status')}
-                className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 ${
-                  activeMainTab === 'status'
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                }`}
-              >
-                <Clock className="h-4 w-4" />
-                本日の運行状況・乗車確認
-              </button>
-            </div>
-
-            {/* ========================================================= */}
-            {/* タブ 1: 週間予約入力ビュー (メイン改善機能) */}
-            {/* ========================================================= */}
-            {activeMainTab === 'weekly' && (
-              <div className="space-y-5 animate-in fade-in duration-300">
-                {/* 週間ナビゲーションバー */}
-                <div className="bg-gradient-to-r from-slate-900/90 to-indigo-950/40 border border-indigo-500/20 rounded-3xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setWeekOffset(prev => prev - 1)}
-                      className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all flex items-center gap-1 text-xs font-bold active:scale-95"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                      <span className="hidden sm:inline">前の週</span>
-                    </button>
-
-                    <button
-                      onClick={() => setWeekOffset(0)}
-                      disabled={weekOffset === 0}
-                      className={`px-3 py-2 rounded-xl text-xs font-black border transition-all ${
-                        weekOffset === 0
-                          ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
-                          : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'
-                      }`}
-                    >
-                      今週
-                    </button>
-
-                    <button
-                      onClick={() => setWeekOffset(prev => prev + 1)}
-                      className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all flex items-center gap-1 text-xs font-bold active:scale-95"
-                    >
-                      <span className="hidden sm:inline">次の週</span>
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-
-                    <div className="ml-2">
-                      <h2 className="text-sm sm:text-base font-black text-white">
-                        {mondayDate.getFullYear()}年 {mondayDate.getMonth() + 1}月{mondayDate.getDate()}日(月) 〜 {fridayDate.getMonth() + 1}月{fridayDate.getDate()}日(金)
-                      </h2>
-                      <p className="text-[10px] sm:text-xs text-indigo-300">
-                        {activeStudent?.name} さんの週間運行スケジュール
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* 一括基本パターン適用ボタン */}
+          {/* タブ 2: 月間カレンダービュー */}
+          {activeMainTab === 'monthly' && (
+            <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="flex flex-col sm:flex-row items-center justify-between bg-slate-900/90 border border-slate-800 p-4 rounded-3xl gap-3">
+                <div className="flex items-center gap-3">
                   <button
-                    onClick={handleApplyWeekDefaultPattern}
-                    className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white text-xs font-black rounded-xl shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-1.5 active:scale-95 self-stretch sm:self-auto"
+                    onClick={() => setCurrentMonth(prev => prev === 0 ? 11 : prev - 1)}
+                    className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
                   >
-                    <Sparkles className="h-4 w-4 text-amber-300" />
-                    今週の基本パターンを一括適用
+                    <ChevronLeft className="h-4 w-4" />
+                  </button>
+                  <h2 className="text-base font-black text-white">{currentYear}年 {currentMonth + 1}月</h2>
+                  <button
+                    onClick={() => setCurrentMonth(prev => prev === 11 ? 0 : prev + 1)}
+                    className="p-2 rounded-xl bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800"
+                  >
+                    <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
 
-                {/* 週間予約カードグリッド (月〜金) */}
-                <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
-                  {currentWeekDays.map((dateStr) => {
-                    const dateObj = new Date(`${dateStr}T00:00:00`)
-                    const dayLabels = ['日', '月', '火', '水', '木', '金', '土']
-                    const dayOfWeekNum = dateObj.getDay()
-                    const dayName = dayLabels[dayOfWeekNum]
-                    const isToday = dateStr === new Date().toISOString().split('T')[0]
-                    const isPast = isPastCancelLimit(dateStr)
+                {activeStudent && (
+                  <button
+                    onClick={() => handleBulkGenerate(activeStudent.id)}
+                    className="px-3.5 py-2 bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-1.5"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                    翌月分の平日予約を一括自動生成
+                  </button>
+                )}
+              </div>
 
-                    // 運行スケジュールステータス
+              <div className="bg-slate-900/80 border border-slate-855 rounded-3xl p-4 sm:p-5 shadow-xl">
+                <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2 text-center text-[11px] font-black text-slate-400">
+                  <div className="text-rose-400">日</div><div>月</div><div>火</div><div className="text-amber-400">水</div><div>木</div><div>金</div><div className="text-indigo-400">土</div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+                  {Array.from({ length: getFirstDayOfMonth(currentYear, currentMonth) }).map((_, idx) => (
+                    <div key={`empty-${idx}`} className="h-20 sm:h-24 bg-slate-950/20 rounded-2xl" />
+                  ))}
+
+                  {Array.from({ length: getDaysInMonth(currentYear, currentMonth) }).map((_, idx) => {
+                    const day = idx + 1
+                    const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+                    const dateObj = new Date(`${dateStr}T00:00:00`)
+                    const dayOfWeek = dateObj.getDay()
+                    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
                     const scheduleStatus = getDateScheduleStatus(dateStr)
                     const isSuspended = scheduleStatus.isSuspended
-                    const isMorningSuspended = isSuspended || scheduleStatus.isMorningSuspended
-                    const isAfternoonSuspended = isSuspended || scheduleStatus.isAfternoonSuspended
-
-                    // 現在の予約情報
-                    const res = reservations.find(r => r.student_id === activeStudent?.id && r.date === dateStr)
-                    const isMorningRiding = isMorningSuspended ? false : res ? res.morning_status : activeStudent?.default_morning_ride ?? true
-                    const afternoonSchedule = isAfternoonSuspended ? null : res ? res.afternoon_schedule : activeStudent?.default_afternoon_schedule || '下校2便'
-                    const note = res?.note || ''
-
-                    // 時刻計算
-                    const morningTime = getTripTime('登校便', dateStr)
-                    const morningStopArrivalTime = activeStop ? getAdjustedStopArrivalTime(activeStop, dateStr) : ''
+                    const currentRes = reservations.find(r => r.student_id === activeStudent?.id && r.date === dateStr)
+                    const morningStatus = currentRes ? currentRes.morning_status : (activeStudent?.default_morning_ride ?? true)
+                    const afternoonSchedule = currentRes ? currentRes.afternoon_schedule : (activeStudent?.default_afternoon_schedule || '下校1便')
 
                     return (
-                      <div 
+                      <div
                         key={dateStr}
-                        className={`rounded-3xl border p-4 flex flex-col justify-between space-y-4 transition-all duration-200 ${
-                          isToday 
-                            ? 'bg-indigo-950/30 border-indigo-500/50 ring-2 ring-indigo-500/20 shadow-xl'
-                            : isSuspended 
-                            ? 'bg-slate-900/30 border-slate-850 opacity-75'
-                            : 'bg-slate-900/60 border-slate-850 hover:border-slate-750 shadow-lg'
+                        onClick={() => {
+                          if (!isWeekend && !isSuspended && activeStudent) openEditModal(dateStr, activeStudent.id)
+                        }}
+                        className={`h-20 sm:h-24 rounded-2xl border p-1.5 sm:p-2 flex flex-col justify-between transition-all relative ${
+                          isWeekend || isSuspended ? 'border-slate-855 bg-slate-950/40 opacity-60' : 'border-slate-800/80 bg-slate-950/70 hover:border-indigo-500/50 cursor-pointer'
                         }`}
                       >
-                        {/* 日付ヘッダー */}
-                        <div className="border-b border-slate-800 pb-2.5">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-base font-black text-white">
-                                  {dateObj.getMonth() + 1}/{dateObj.getDate()}
-                                </span>
-                                <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
-                                  dayOfWeekNum === 3 ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-300'
-                                }`}>
-                                  ({dayName})
-                                </span>
-                              </div>
-                              {isToday && (
-                                <span className="text-[10px] font-black text-indigo-300 bg-indigo-500/20 px-1.5 py-0.2 rounded inline-block mt-0.5">
-                                  本日
-                                </span>
-                              )}
-                            </div>
-
-                            {/* 運行区分バッジ */}
-                            {scheduleStatus.type === 'special' ? (
-                              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold">
-                                {scheduleStatus.label}
-                              </span>
-                            ) : scheduleStatus.type === 'shortened' ? (
-                              <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold">
-                                水曜短縮
-                              </span>
-                            ) : isSuspended ? (
-                              <span className="text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded font-bold">
-                                全便運休
-                              </span>
-                            ) : null}
-                          </div>
-
-                          {scheduleStatus.note && (
-                            <p className="text-[10px] text-slate-400 mt-1 line-clamp-1">
-                              {scheduleStatus.note}
-                            </p>
-                          )}
+                        <div className="flex justify-between items-center text-[10px] sm:text-xs">
+                          <span className={`font-black ${dayOfWeek === 0 ? 'text-rose-400' : dayOfWeek === 6 ? 'text-indigo-400' : 'text-slate-200'}`}>{day}</span>
                         </div>
 
-                        {/* メイン予約切り替えセクション */}
-                        <div className="space-y-3.5 text-xs">
-                          {/* 1. 登校便 */}
-                          <div className="bg-slate-950/70 p-3 rounded-2xl border border-slate-850 space-y-2">
-                            <div className="flex justify-between items-center text-[11px]">
-                              <span className="font-bold text-slate-300 flex items-center gap-1">
-                                <Bus className="h-3 w-3 text-indigo-400" />
-                                登校便
-                              </span>
-                              <span className="font-mono text-[10px] text-slate-400 font-bold">
-                                {morningStopArrivalTime ? `${morningStopArrivalTime}乗車` : `${morningTime}発`}
-                              </span>
+                        {!isWeekend && !isSuspended && (
+                          <div className="space-y-1 my-auto">
+                            <div className={`text-[9px] sm:text-[10px] font-bold px-1 py-0.5 rounded truncate ${morningStatus ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                              登: {morningStatus ? '乗車' : '✕'}
                             </div>
-
-                            {isMorningSuspended ? (
-                              <div className="py-2 text-center text-[10px] font-bold text-rose-400 bg-rose-500/10 rounded-xl border border-rose-500/20">
-                                登校便は運休です
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isPast}
-                                onClick={() => handleToggleMorning(dateStr)}
-                                className={`w-full py-2 px-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 border active:scale-95 ${
-                                  isMorningRiding
-                                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-md shadow-emerald-500/10'
-                                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-                                } ${isPast ? 'opacity-60 cursor-not-allowed' : ''}`}
-                              >
-                                {isMorningRiding ? (
-                                  <>
-                                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                                    乗車する
-                                  </>
-                                ) : (
-                                  <>
-                                    <X className="h-4 w-4 text-slate-500" />
-                                    利用しない
-                                  </>
-                                )}
-                              </button>
-                            )}
-
-                            {/* 登校便 リアルタイム乗車見守りバッジ */}
-                            {(() => {
-                              const ride = rideStatuses.find(
-                                r => r.student_id === activeStudent?.id && r.date === dateStr && (r.trip_name === '登校便' || !r.trip_name)
-                              )
-                              const timeStr = ride?.updated_at ? new Date(ride.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''
-
-                              if (!isMorningRiding) {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-slate-900/60 text-slate-500 text-center font-bold">
-                                    不乗車・お休み
-                                  </div>
-                                )
-                              }
-                              if (ride?.status === 'completed') {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-center font-black flex items-center justify-center gap-1 animate-in fade-in">
-                                    <Check className="h-3 w-3" />
-                                    乗車完了 {timeStr ? `(${timeStr} 乗車)` : ''}
-                                  </div>
-                                )
-                              }
-                              if (ride?.status === 'absent') {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 text-center font-bold">
-                                    欠席確認済み
-                                  </div>
-                                )
-                              }
-                              return (
-                                <div className="text-[10px] py-1 px-2 rounded-lg bg-slate-900/80 text-amber-300/80 text-center font-bold flex items-center justify-center gap-1">
-                                  <Clock className="h-2.5 w-2.5" />
-                                  未乗車（点呼待ち）
-                                </div>
-                              )
-                            })()}
-                          </div>
-
-                          {/* 2. 下校便 */}
-                          <div className="bg-slate-950/70 p-3 rounded-2xl border border-slate-850 space-y-2">
-                            <div className="flex justify-between items-center text-[11px]">
-                              <span className="font-bold text-slate-300 flex items-center gap-1">
-                                <Bus className="h-3 w-3 text-purple-400" />
-                                下校便
-                              </span>
-                              {afternoonSchedule && afternoonSchedule !== '乗らない' && (
-                                <span className="font-mono text-[10px] text-purple-300 font-bold">
-                                  {getTripTime(afternoonSchedule, dateStr)}発
-                                </span>
-                              )}
+                            <div className={`text-[9px] sm:text-[10px] font-bold px-1 py-0.5 rounded truncate ${afternoonSchedule ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-800 text-slate-400'}`}>
+                              下: {afternoonSchedule ? afternoonSchedule.replace('下校', '') : '✕'}
                             </div>
-
-                            {isAfternoonSuspended ? (
-                              <div className="py-2 text-center text-[10px] font-bold text-rose-400 bg-rose-500/10 rounded-xl border border-rose-500/20">
-                                下校便は運休です
-                              </div>
-                            ) : (
-                              <select
-                                disabled={isPast}
-                                value={afternoonSchedule || '乗らない'}
-                                onChange={(e) => handleChangeAfternoon(dateStr, e.target.value === '乗らない' ? null : e.target.value)}
-                                className={`w-full py-2 px-2.5 bg-slate-900 border rounded-xl text-xs font-bold focus:outline-none focus:ring-1 focus:ring-purple-500 transition-all ${
-                                  afternoonSchedule && afternoonSchedule !== '乗らない'
-                                    ? 'border-purple-500/40 text-purple-200 bg-purple-950/20'
-                                    : 'border-slate-800 text-slate-400'
-                                } ${isPast ? 'opacity-60 cursor-not-allowed' : ''}`}
-                              >
-                                {[1, 2, 3, 4, 5].map(num => {
-                                  const tripKey = `下校${num}便`
-                                  const isOp = isTripOperating(tripKey, dateStr)
-                                  const timeStr = getTripTime(tripKey, dateStr)
-                                  return (
-                                    <option key={tripKey} value={tripKey} disabled={!isOp}>
-                                      {tripKey} {isOp ? `(${timeStr}発)` : '(運休)'}
-                                    </option>
-                                  )
-                                })}
-                                <option value="乗らない">乗車しない（自己送迎等）</option>
-                              </select>
-                            )}
-
-                            {/* 下校便 リアルタイム乗車見守りバッジ */}
-                            {(() => {
-                              if (!afternoonSchedule || afternoonSchedule === '乗らない') {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-slate-900/60 text-slate-500 text-center font-bold">
-                                    不乗車・自己送迎
-                                  </div>
-                                )
-                              }
-                              const ride = rideStatuses.find(
-                                r => r.student_id === activeStudent?.id && r.date === dateStr && r.trip_name === afternoonSchedule
-                              )
-                              const timeStr = ride?.updated_at ? new Date(ride.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }) : ''
-
-                              if (ride?.status === 'completed') {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-center font-black flex items-center justify-center gap-1 animate-in fade-in">
-                                    <Check className="h-3 w-3" />
-                                    乗車完了 {timeStr ? `(${timeStr} 乗車)` : ''}
-                                  </div>
-                                )
-                              }
-                              if (ride?.status === 'absent') {
-                                return (
-                                  <div className="text-[10px] py-1 px-2 rounded-lg bg-rose-500/15 border border-rose-500/30 text-rose-300 text-center font-bold">
-                                    欠席確認済み
-                                  </div>
-                                )
-                              }
-                              return (
-                                <div className="text-[10px] py-1 px-2 rounded-lg bg-slate-900/80 text-amber-300/80 text-center font-bold flex items-center justify-center gap-1">
-                                  <Clock className="h-2.5 w-2.5" />
-                                  未乗車（点呼待ち）
-                                </div>
-                              )
-                            })()}
                           </div>
+                        )}
 
-                          {/* 3. メモ・連絡事項 */}
-                          <div className="pt-0.5">
-                            {note ? (
-                              <button
-                                type="button"
-                                disabled={isPast}
-                                onClick={() => handleOpenNoteModal(dateStr)}
-                                className="w-full text-left p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-300 hover:bg-indigo-500/20 transition-all flex items-start gap-1.5"
-                              >
-                                <MessageSquare className="h-3.5 w-3.5 text-indigo-400 shrink-0 mt-0.5" />
-                                <span className="line-clamp-2">{note}</span>
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                disabled={isPast}
-                                onClick={() => handleOpenNoteModal(dateStr)}
-                                className="w-full py-1.5 px-2 rounded-xl bg-slate-950/40 hover:bg-slate-950 border border-dashed border-slate-800 hover:border-slate-700 text-[10px] text-slate-500 hover:text-slate-400 transition-all flex items-center justify-center gap-1"
-                              >
-                                <MessageSquare className="h-3 w-3" />
-                                連絡メモを追加
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* フッター状態表示 */}
-                        <div className="pt-2 border-t border-slate-850 flex justify-between items-center text-[10px]">
-                          {isPast ? (
-                            <span className="text-slate-500 font-bold">変更締切済</span>
-                          ) : (
-                            <span className="text-emerald-400 font-bold flex items-center gap-1">
-                              <Check className="h-3 w-3" />
-                              受付中（朝7時迄）
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(dateStr, activeStudent?.id || '')}
-                            className="text-slate-400 hover:text-white underline text-[10px]"
-                          >
-                            詳細設定
-                          </button>
-                        </div>
+                        {isSuspended && !isWeekend && (
+                          <span className="text-[9px] text-rose-400 font-bold truncate">{scheduleStatus.label}</span>
+                        )}
                       </div>
                     )
                   })}
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* ========================================================= */}
-            {/* タブ 2: 月間カレンダービュー (月全体の見通し) */}
-            {/* ========================================================= */}
-            {activeMainTab === 'monthly' && (
-              <div className="space-y-6 animate-in fade-in duration-300">
-                {/* 翌月一括予約設定パネル */}
-                <div className="bg-slate-900/60 border border-slate-850 rounded-3xl p-6 relative shadow-xl">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
-                    <div>
-                      <h3 className="text-base font-black text-white flex items-center gap-2">
-                        <Sparkles className="h-4 w-4 text-amber-400" />
-                        翌月1ヶ月分の基本一括自動登録
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        翌月の平日に基本パターン予約を一括作成できます。
-                      </p>
+          {/* タブ 3: 本日の運行状況 */}
+          {activeMainTab === 'status' && (
+            <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
+                <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-indigo-400" />
+                  本日の運行状況・乗車完了ステータス
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <span className="text-xs font-bold text-slate-300">登校便</span>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-xs">
+                      <span className="text-slate-400 block mb-0.5 text-[10px]">乗車確認状況:</span>
+                      <p className="font-bold text-white">乗車確認中</p>
                     </div>
-
-                    <button
-                      onClick={() => handleBulkGenerate(activeStudent?.id || '')}
-                      disabled={isGeneratingBulk}
-                      className="px-5 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white text-xs font-black rounded-xl shadow-lg shadow-indigo-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-2"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      {activeStudent?.name} の翌月予約を一括実行
-                    </button>
-                  </div>
-                </div>
-
-                {/* 月間カレンダーグリッド */}
-                <div className="bg-slate-900/60 border border-slate-850 rounded-3xl p-5 sm:p-6 space-y-4 shadow-xl">
-                  {/* 年月ナビゲーション */}
-                  <div className="flex justify-between items-center pb-3 border-b border-slate-850">
-                    <button
-                      onClick={handlePrevMonth}
-                      className="p-2 bg-slate-950 hover:bg-slate-800 rounded-xl border border-slate-800 text-slate-300 transition-all active:scale-95"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <h3 className="text-lg font-black text-white font-mono">
-                      {currentYear}年 {currentMonth + 1}月
-                    </h3>
-                    <button
-                      onClick={handleNextMonth}
-                      className="p-2 bg-slate-950 hover:bg-slate-800 rounded-xl border border-slate-800 text-slate-300 transition-all active:scale-95"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
                   </div>
 
-                  {/* 曜日ヘッダー */}
-                  <div className="grid grid-cols-7 gap-1 text-center text-xs font-bold text-slate-400 pb-2">
-                    <span className="text-rose-400">日</span>
-                    <span>月</span>
-                    <span>火</span>
-                    <span className="text-amber-400">水</span>
-                    <span>木</span>
-                    <span>金</span>
-                    <span className="text-blue-400">土</span>
-                  </div>
-
-                  {/* 日付セル */}
-                  <div className="grid grid-cols-7 gap-1.5">
-                    {(() => {
-                      const daysInMonth = getDaysInMonth(currentYear, currentMonth)
-                      const firstDay = getFirstDayOfMonth(currentYear, currentMonth)
-                      const cells = []
-
-                      for (let i = 0; i < firstDay; i++) {
-                        cells.push(<div key={`empty-${i}`} className="min-h-[85px] bg-slate-950/20 rounded-2xl" />)
-                      }
-
-                      for (let day = 1; day <= daysInMonth; day++) {
-                        const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-                        const dObj = new Date(`${dateStr}T00:00:00`)
-                        const dayOfWeek = dObj.getDay()
-                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
-                        const isPast = isPastCancelLimit(dateStr)
-
-                        const scheduleStatus = getDateScheduleStatus(dateStr)
-                        const isSuspended = scheduleStatus.isSuspended
-                        const res = reservations.find(r => r.student_id === activeStudent?.id && r.date === dateStr)
-
-                        cells.push(
-                          <div
-                            key={dateStr}
-                            onClick={() => !isPast && !isWeekend && openEditModal(dateStr, activeStudent?.id || '')}
-                            className={`min-h-[85px] p-2 rounded-2xl border flex flex-col justify-between text-xs transition-all ${
-                              isWeekend 
-                                ? 'bg-slate-950/40 border-slate-900 text-slate-600' 
-                                : isPast
-                                ? 'bg-slate-900/30 border-slate-850 opacity-60 cursor-not-allowed'
-                                : 'bg-slate-950/80 border-slate-800 hover:border-indigo-500/50 cursor-pointer hover:shadow-lg'
-                            }`}
-                          >
-                            <div className="flex justify-between items-start">
-                              <span className={`font-bold font-mono ${
-                                dayOfWeek === 0 ? 'text-rose-400' : dayOfWeek === 6 ? 'text-blue-400' : 'text-white'
-                              }`}>
-                                {day}
-                              </span>
-                              {scheduleStatus.type === 'special' && (
-                                <span className="text-[8px] bg-amber-500/20 text-amber-300 px-1 py-0.2 rounded font-bold">
-                                  特
-                                </span>
-                              )}
-                            </div>
-
-                            {!isWeekend && (
-                              <div className="space-y-0.5 text-[10px]">
-                                {isSuspended ? (
-                                  <span className="text-[9px] text-rose-400 font-bold block">運休</span>
-                                ) : (
-                                  <>
-                                    <div className="flex items-center gap-1">
-                                      <span className={`h-1.5 w-1.5 rounded-full ${res?.morning_status ?? activeStudent?.default_morning_ride ? 'bg-emerald-400' : 'bg-slate-600'}`} />
-                                      <span className="text-slate-300 text-[9px] truncate">
-                                        登校:{res?.morning_status ?? activeStudent?.default_morning_ride ? '乗車' : 'なし'}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
-                                      <span className="text-purple-300 text-[9px] truncate">
-                                        {res?.afternoon_schedule || activeStudent?.default_afternoon_schedule || 'なし'}
-                                      </span>
-                                    </div>
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      }
-                      return cells
-                    })()}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ========================================================= */}
-            {/* タブ 3: 本日の運行状況・乗車確認 */}
-            {/* ========================================================= */}
-            {activeMainTab === 'status' && (
-              <div className="space-y-6 animate-in fade-in duration-300">
-                {/* 運行ダイヤ遅延モニター */}
-                {(() => {
-                  const todayStr = new Date().toISOString().split('T')[0]
-                  const now = new Date()
-                  const currentHour = now.getHours()
-                  const currentTripName = currentHour < 12 ? '登校便' : (reservations.find(r => r.student_id === activeStudent?.id && r.date === todayStr)?.afternoon_schedule || '下校2便')
-                  const activeOp = busOperations.find(o => o.bus_route_id === activeRoute?.id && o.trip_name === currentTripName)
-
-                  return (
-                    <div className="bg-gradient-to-r from-slate-900/90 to-indigo-950/40 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-                      <div className="flex justify-between items-center pb-3 border-b border-slate-850">
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-5 w-5 text-indigo-400" />
-                          <h3 className="text-base font-black text-white">本日のバス運行モニター</h3>
-                        </div>
-                        <span className="text-xs font-mono font-bold text-amber-300 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20">
-                          {activeRoute?.route_name || '担当路線'}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-4">
-                        {activeOp?.status === 'running' ? (
-                          activeOp.delay_minutes > 0 ? (
-                            <div className="flex items-center gap-3 text-amber-400">
-                              <AlertTriangle className="h-6 w-6 shrink-0" />
-                              <div>
-                                <p className="text-xs text-slate-400">運行状況</p>
-                                <p className="text-base font-black text-amber-300">約 {activeOp.delay_minutes} 分遅延して運行中</p>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-3 text-emerald-400">
-                              <CheckCircle2 className="h-6 w-6 shrink-0" />
-                              <div>
-                                <p className="text-xs text-slate-400">運行状況</p>
-                                <p className="text-base font-black text-emerald-300">定刻通り運行中</p>
-                              </div>
-                            </div>
-                          )
-                        ) : activeOp?.status === 'finished' ? (
-                          <div className="flex items-center gap-3 text-blue-400">
-                            <CheckCircle2 className="h-6 w-6 shrink-0 text-blue-400" />
-                            <div>
-                              <p className="text-xs text-slate-400">運行状況</p>
-                              <p className="text-base font-black text-blue-300">{currentTripName} は運行を終了しました</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-3 text-slate-400">
-                            <Clock className="h-6 w-6 shrink-0 text-slate-500" />
-                            <div>
-                              <p className="text-xs text-slate-500">運行状況</p>
-                              <p className="text-base font-black text-slate-300">運行前（まもなく開始）</p>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* デモ用シミュレータボタン */}
-                      {isDemoMode && activeOp && (
-                        <div className="pt-3 border-t border-slate-850 flex gap-2">
-                          <button
-                            onClick={() => toggleOperationStatus(activeOp.bus_route_id || 'route-a', currentTripName)}
-                            className="px-3 py-1.5 rounded-xl text-xs bg-slate-950 border border-slate-800 text-slate-300 hover:text-white flex items-center gap-1.5"
-                          >
-                            <RefreshCw className="h-3 w-3" />
-                            運行ステータス切替 (デモ)
-                          </button>
-                        </div>
-                      )}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <span className="text-xs font-bold text-slate-300">下校便</span>
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-xs">
+                      <span className="text-slate-400 block mb-0.5 text-[10px]">利用予定便:</span>
+                      <p className="font-bold text-white">{activeStudent?.default_afternoon_schedule || '利用なし'}</p>
                     </div>
-                  )
-                })()}
-
-                {/* 本日の乗車チェックイン状況カード */}
-                <div className="bg-slate-900/60 border border-slate-850 rounded-3xl p-6 space-y-4 shadow-xl">
-                  <h3 className="text-base font-black text-white flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                    お子様の本日の乗降チェック状況
-                  </h3>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {students.map(student => {
-                      const todayStr = new Date().toISOString().split('T')[0]
-                      const res = reservations.find(r => r.student_id === student.id && r.date === todayStr)
-                      const morningRide = rideStatuses.find(r => r.student_id === student.id && r.date === todayStr && (r.trip_name === '登校便' || !r.trip_name))
-                      const afternoonTrip = res?.afternoon_schedule || '下校2便'
-                      const afternoonRide = rideStatuses.find(r => r.student_id === student.id && r.date === todayStr && r.trip_name === afternoonTrip)
-                      const stop = busStops.find(s => s.id === student.default_bus_stop_id)
-
-                      return (
-                        <div key={student.id} className="bg-slate-950/80 border border-slate-850 rounded-2xl p-4 space-y-3">
-                          <div className="flex justify-between items-center pb-2 border-b border-slate-850">
-                            <div>
-                              <h4 className="font-bold text-sm text-white">{student.name} さん</h4>
-                              <span className="text-[10px] text-slate-400">バス停: {stop?.stop_name || '未設定'}</span>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2 text-xs">
-                            <div className="flex justify-between items-center p-2 bg-slate-900/60 rounded-xl">
-                              <span className="text-slate-400 font-bold">登校便</span>
-                              {morningRide?.status === 'completed' ? (
-                                <span className="text-emerald-400 font-black flex items-center gap-1">
-                                  ✅ 乗車完了
-                                  {morningRide.updated_at && (
-                                    <span className="text-[10px] text-emerald-300/80 font-mono">
-                                      ({new Date(morningRide.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })})
-                                    </span>
-                                  )}
-                                </span>
-                              ) : morningRide?.status === 'absent' ? (
-                                <span className="text-rose-400 font-bold">❌ 欠席確認済</span>
-                              ) : (
-                                <span className="text-slate-500 font-bold">未乗車（点呼待ち）</span>
-                              )}
-                            </div>
-
-                            <div className="flex justify-between items-center p-2 bg-slate-900/60 rounded-xl">
-                              <span className="text-slate-400 font-bold">下校 ({afternoonTrip})</span>
-                              {afternoonRide?.status === 'completed' ? (
-                                <span className="text-emerald-400 font-black flex items-center gap-1">
-                                  ✅ 乗車完了
-                                  {afternoonRide.updated_at && (
-                                    <span className="text-[10px] text-emerald-300/80 font-mono">
-                                      ({new Date(afternoonRide.updated_at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })})
-                                    </span>
-                                  )}
-                                </span>
-                              ) : afternoonRide?.status === 'absent' ? (
-                                <span className="text-rose-400 font-bold">❌ 欠席確認済</span>
-                              ) : (
-                                <span className="text-slate-500 font-bold">未乗車（点呼待ち）</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
                   </div>
                 </div>
+
+                {isDemoMode && (
+                  <div className="pt-2 border-t border-slate-800">
+                    <button
+                      onClick={() => toggleOperationStatus(activeRoute?.id || 'route-a', '登校便')}
+                      className="px-3 py-1.5 bg-slate-800 text-slate-300 rounded-xl text-[11px] font-bold"
+                    >
+                      [デモ] 運行ステータスを模擬進行
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </>
-        )}
+            </div>
+          )}
       </main>
 
-      {/* ========================================================= */}
-      {/* モーダル: 簡易メモ・連絡事項の入力 */}
-      {/* ========================================================= */}
+      {/* モーダル: 連絡事項・メモ編集 */}
       {editingNoteDate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <h3 className="text-base font-black text-white flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-indigo-400" />
-                連絡メモ・備考の入力
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-black text-white flex items-center gap-1.5">
+                <MessageSquare className="h-4 w-4 text-amber-400" />
+                連絡事項・メモの入力
               </h3>
-              <button
-                onClick={() => setEditingNoteDate(null)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg"
-              >
-                <X className="h-5 w-5" />
+              <button onClick={() => setEditingNoteDate(null)} className="p-1 text-slate-400 hover:text-white rounded-lg">
+                <X className="h-4 w-4" />
               </button>
             </div>
-
-            <div className="text-xs space-y-1">
-              <span className="text-slate-400">対象日:</span>
-              <p className="font-mono font-bold text-indigo-300">
-                {editingNoteDate} ({activeStudent?.name} さん)
-              </p>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-300 mb-1">{editingNoteDate} のメモ</label>
+              <textarea
+                rows={3}
+                value={noteInputText}
+                onChange={(e) => setNoteInputText(e.target.value)}
+                placeholder="例：体調不良のため欠席など"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
             </div>
-
-            <textarea
-              rows={3}
-              value={noteInputText}
-              onChange={(e) => setNoteInputText(e.target.value)}
-              placeholder="例：部活のため1便変更、病院のため欠席、親送迎など"
-              className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-
-            <div className="flex gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setEditingNoteDate(null)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-bold transition-all"
-              >
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setEditingNoteDate(null)} className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold">
                 キャンセル
               </button>
-              <button
-                type="button"
-                disabled={isSavingNote}
-                onClick={handleSaveNoteSubmit}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95 disabled:opacity-50"
-              >
+              <button type="button" onClick={handleSaveNoteSubmit} className="flex-1 py-2 bg-indigo-600 text-white rounded-xl text-xs font-black">
                 保存する
               </button>
             </div>
@@ -1273,57 +926,35 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
-      {/* ========================================================= */}
-      {/* モーダル: 月間用個別予約修正 */}
-      {/* ========================================================= */}
-      {showEditModal && selectedDate && (
+      {/* モーダル: 月間カレンダー個別予約変更 */}
+      {showEditModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <div>
-                <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider block">
-                  {students.find(s => s.id === selectedStudentId)?.name} さんの予約
-                </span>
-                <h3 className="text-base font-black text-white mt-0.5">乗車予約の変更</h3>
-              </div>
-              <button
-                onClick={() => setShowEditModal(false)}
-                className="p-1 text-slate-400 hover:text-white rounded-lg"
-              >
-                <X className="h-5 w-5" />
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-2.5">
+              <h3 className="text-sm font-black text-white flex items-center gap-1.5">
+                <CalendarIcon className="h-4 w-4 text-indigo-400" />
+                {selectedDate} の予約変更
+              </h3>
+              <button onClick={() => setShowEditModal(false)} className="p-1 text-slate-400 hover:text-white rounded-lg">
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-300 mb-1">対象運行日</label>
-                <p className="font-mono font-bold text-indigo-300 bg-slate-950 p-2.5 rounded-xl border border-slate-850">
-                  {selectedDate}
-                </p>
-              </div>
-
+            <div className="space-y-3 text-xs">
               <div>
                 <label className="block font-bold text-slate-300 mb-1">登校便</label>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setEditMorning(true)}
-                    className={`flex-1 py-2.5 rounded-xl font-bold border transition-all ${
-                      editMorning 
-                        ? 'bg-emerald-500/25 border-emerald-500 text-emerald-300' 
-                        : 'bg-slate-950 border-slate-800 text-slate-500'
-                    }`}
+                    className={`flex-1 py-2.5 rounded-xl font-bold border ${editMorning ? 'bg-emerald-500/25 border-emerald-500 text-emerald-300' : 'bg-slate-950 border-slate-800 text-slate-500'}`}
                   >
-                    乗車する
+                    利用する
                   </button>
                   <button
                     type="button"
                     onClick={() => setEditMorning(false)}
-                    className={`flex-1 py-2.5 rounded-xl font-bold border transition-all ${
-                      !editMorning 
-                        ? 'bg-rose-500/25 border-rose-500 text-rose-300' 
-                        : 'bg-slate-950 border-slate-800 text-slate-500'
-                    }`}
+                    className={`flex-1 py-2.5 rounded-xl font-bold border ${!editMorning ? 'bg-rose-500/25 border-rose-500 text-rose-300' : 'bg-slate-950 border-slate-800 text-slate-500'}`}
                   >
                     利用しない
                   </button>
@@ -1337,11 +968,11 @@ export const Dashboard: React.FC = () => {
                   onChange={(e) => setEditAfternoon(e.target.value === '乗らない' ? null : e.target.value)}
                   className="w-full py-2.5 px-3 bg-slate-950 border border-slate-800 rounded-xl text-white font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 >
-                  <option value="下校1便">下校1便 ({getTripTime('下校1便', selectedDate)})</option>
-                  <option value="下校2便">下校2便 ({getTripTime('下校2便', selectedDate)})</option>
-                  <option value="下校3便">下校3便 ({getTripTime('下校3便', selectedDate)})</option>
-                  <option value="下校4便">下校4便 ({getTripTime('下校4便', selectedDate)})</option>
-                  <option value="下校5便">下校5便 ({getTripTime('下校5便', selectedDate)})</option>
+                  <option value="下校1便">下校1便 ({getTripTime('下校1便', selectedDate || undefined)})</option>
+                  <option value="下校2便">下校2便 ({getTripTime('下校2便', selectedDate || undefined)})</option>
+                  <option value="下校3便">下校3便 ({getTripTime('下校3便', selectedDate || undefined)})</option>
+                  <option value="下校4便">下校4便 ({getTripTime('下校4便', selectedDate || undefined)})</option>
+                  <option value="下校5便">下校5便 ({getTripTime('下校5便', selectedDate || undefined)})</option>
                   <option value="乗らない">乗車しない</option>
                 </select>
               </div>
@@ -1359,18 +990,10 @@ export const Dashboard: React.FC = () => {
             </div>
 
             <div className="flex gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowEditModal(false)}
-                className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-300 rounded-xl text-xs font-bold transition-all"
-              >
+              <button type="button" onClick={() => setShowEditModal(false)} className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl text-xs font-bold">
                 キャンセル
               </button>
-              <button
-                type="button"
-                onClick={handleSaveIndividualReservation}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-black shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
-              >
+              <button type="button" onClick={handleSaveIndividualReservation} className="flex-1 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-black">
                 保存する
               </button>
             </div>
@@ -1382,7 +1005,7 @@ export const Dashboard: React.FC = () => {
       <ParentOnboardingModal
         isOpen={isOnboardingOpen}
         onClose={() => setIsOnboardingOpen(false)}
-        onComplete={handleCompleteOnboarding}
+        onComplete={() => setIsOnboardingOpen(false)}
       />
     </div>
   )

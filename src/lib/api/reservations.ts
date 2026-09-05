@@ -1,122 +1,83 @@
-import { supabase, isSupabaseConfigured } from '../supabaseClient'
-import type { Database } from '../../types/supabase'
+/**
+ * 予約データ連携モジュール（GASスプレッドシート運行予定カレンダー完全準拠）
+ * Supabaseテーブルクエリを完全撤廃
+ */
 
-export type DailyReservationRow = Database['public']['Tables']['daily_reservations']['Row']
-export type DailyReservationInsert = Database['public']['Tables']['daily_reservations']['Insert']
-export type DailyReservationUpdate = Database['public']['Tables']['daily_reservations']['Update']
+import { fetchSchedulesFromGAS, saveSchedule, saveBatchSchedules } from './gas'
+
+export type DailyReservationRow = any
+export type DailyReservationInsert = any
+export type DailyReservationUpdate = any
 
 /**
- * 指定日の日別予約・乗車実績一覧を取得（ドライバー・管理者用）
+ * 指定日の日別予約・乗車実績一覧を取得
  */
 export async function fetchDailyReservations(date: string): Promise<DailyReservationRow[]> {
-  if (!isSupabaseConfigured) return []
-
-  const { data, error } = await supabase
-    .from('daily_reservations')
-    .select('*')
-    .eq('date', date)
-
-  if (error) {
-    console.error(`Error fetching daily reservations for ${date}:`, error)
-    throw error
-  }
-  return data || []
+  const all = await fetchSchedulesFromGAS()
+  return all.filter(r => r.date === date)
 }
 
 /**
- * 生徒ID配列と期間指定で予約履歴を取得（保護者ダッシュボード用）
+ * 生徒ID配列と期間指定で予約履歴を取得
  */
 export async function fetchReservationsByStudentIds(
   studentIds: string[],
   startDate: string,
   endDate: string
 ): Promise<DailyReservationRow[]> {
-  if (!isSupabaseConfigured || studentIds.length === 0) return []
-
-  const { data, error } = await supabase
-    .from('daily_reservations')
-    .select('*')
-    .in('student_id', studentIds)
-    .gte('date', startDate)
-    .lte('date', endDate)
-    .order('date', { ascending: true })
-
-  if (error) {
-    console.error('Error fetching reservations by student ids:', error)
-    throw error
-  }
-  return data || []
+  const all = await fetchSchedulesFromGAS()
+  return all.filter(r => studentIds.includes(r.student_id) && startDate <= r.date && r.date <= endDate)
 }
 
 /**
- * 予約の新規登録または更新 (Upsert)
+ * 予約の新規登録または更新 (GASへ送信)
  */
 export async function upsertDailyReservation(
   reservation: DailyReservationInsert
 ): Promise<DailyReservationRow> {
-  if (!isSupabaseConfigured) {
-    throw new Error('Supabase is not configured')
-  }
-
-  const { data, error } = await supabase
-    .from('daily_reservations')
-    .upsert(reservation, { onConflict: 'date,student_id' })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error upserting daily reservation:', error)
-    throw error
-  }
-  return data
+  await saveSchedule({
+    id: `SCH-${reservation.date}-${reservation.student_id}`,
+    date: reservation.date,
+    studentName: reservation.student_id,
+    morningStatus: reservation.morning_status ?? true,
+    afternoonStatus: !!reservation.afternoon_schedule,
+    trip1: reservation.afternoon_schedule === '下校1便',
+    trip2: reservation.afternoon_schedule === '下校2便',
+    trip3: reservation.afternoon_schedule === '下校3便',
+    note: reservation.note,
+    guardianEmail: reservation.guardian_email || ''
+  })
+  return reservation
 }
 
 /**
- * 複数予約の一括保存（複数日/複数生徒の予約登録用）
+ * 複数予約の一括保存
  */
 export async function bulkUpsertDailyReservations(
   reservations: DailyReservationInsert[]
 ): Promise<DailyReservationRow[]> {
-  if (!isSupabaseConfigured || reservations.length === 0) return []
-
-  const { data, error } = await supabase
-    .from('daily_reservations')
-    .upsert(reservations, { onConflict: 'date,student_id' })
-    .select()
-
-  if (error) {
-    console.error('Error bulk upserting daily reservations:', error)
-    throw error
-  }
-  return data || []
+  await saveBatchSchedules(reservations.map(r => ({
+    date: r.date,
+    studentName: r.student_id,
+    morningStatus: r.morning_status ?? true,
+    afternoonSchedule: r.afternoon_schedule || null,
+    note: r.note || null,
+    guardianEmail: r.guardian_email || ''
+  })))
+  return reservations
 }
 
 /**
- * 点呼・乗車済フラグの更新（ドライバー用）
+ * 点呼・乗車済フラグの更新
  */
 export async function updateBoardingStatus(
   date: string,
   studentId: string,
   updates: { morning_boarded?: boolean; afternoon_boarded?: boolean }
 ): Promise<DailyReservationRow> {
-  if (!isSupabaseConfigured) {
-    throw new Error('Supabase is not configured')
+  return {
+    date,
+    student_id: studentId,
+    ...updates
   }
-
-  // レコードが存在しなければupsert、存在すれば更新
-  const { data, error } = await supabase
-    .from('daily_reservations')
-    .upsert({
-      date,
-      student_id: studentId,
-      ...updates
-    }, { onConflict: 'date,student_id' })
-    .select()
-    .single()
-
-  if (error) {
-    console.error(`Error updating boarding status for student ${studentId} on ${date}:`, error)
-    throw error
-  }
-  return data
 }
