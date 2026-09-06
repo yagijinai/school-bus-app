@@ -1,8 +1,9 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { Bus, User, ShieldCheck, ArrowRight } from 'lucide-react'
+import { Bus, User, ShieldCheck, ArrowRight, Zap } from 'lucide-react'
 import type { UserRole } from '../types/app'
+import { verifyRolePassword } from '../lib/authUtils'
 
 export const RoleSelect: React.FC = () => {
   const navigate = useNavigate()
@@ -11,7 +12,16 @@ export const RoleSelect: React.FC = () => {
   const email = user?.email || (user as any)?.user_metadata?.email || 'yagijinai@gmail.com'
   const name = profile?.full_name || (user as any)?.user_metadata?.full_name || (email === 'yagijinai@gmail.com' ? 'てつ' : email.split('@')[0])
 
+  // TODO: [本番リリース時] パスワード認証を有効化すること（現在は試作段階のためバイパス中）
+  // 本番化の仕上げ時は、管理者・乗務員選択時にパスワード入力モーダルを表示し、
+  // verifyRolePassword(role, inputPassword) で検証後にロール確定を行ってください。
   const handleSelectRole = async (role: UserRole) => {
+    if (role === 'admin' || role === 'driver') {
+      // 試作段階：パスワード認証をバイパス（常に true が返却され即時遷移）
+      const isVerified = await verifyRolePassword(role)
+      if (!isVerified) return
+    }
+
     if (selectRole) {
       await selectRole(role)
     }
@@ -81,9 +91,15 @@ export const RoleSelect: React.FC = () => {
               <Bus className="h-7 w-7" />
             </div>
             <div className="min-w-0">
-              <span className="text-base sm:text-lg font-black text-white block">
-                スクールバス乗務員
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-base sm:text-lg font-black text-white block">
+                  スクールバス乗務員
+                </span>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold border border-emerald-500/30 flex items-center gap-1">
+                  <Zap className="h-2.5 w-2.5" />
+                  パスワード不要
+                </span>
+              </div>
               <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                 乗車点呼・出席確認、バス運行ステータス（運行中/到着/遅延）の更新
               </p>
@@ -103,9 +119,15 @@ export const RoleSelect: React.FC = () => {
               <ShieldCheck className="h-7 w-7" />
             </div>
             <div className="min-w-0">
-              <span className="text-base sm:text-lg font-black text-white block">
-                学校管理者
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-base sm:text-lg font-black text-white block">
+                  学校管理者
+                </span>
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full font-bold border border-purple-500/30 flex items-center gap-1">
+                  <Zap className="h-2.5 w-2.5" />
+                  パスワード不要
+                </span>
+              </div>
               <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                 全ルート運行モニター、生徒マスター・行事予定・特別ダイヤの管理
               </p>

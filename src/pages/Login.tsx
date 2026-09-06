@@ -92,8 +92,8 @@ export const Login: React.FC = () => {
   }
 
   // ドライバー直接ログイン実行
-  const handleDriverLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleDriverLogin = async (e?: React.FormEvent) => {
+    e?.preventDefault?.()
     setErrorMessage(null)
     setIsLoading(true)
 
@@ -112,8 +112,8 @@ export const Login: React.FC = () => {
   }
 
   // 管理者直接ログイン実行
-  const handleAdminLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleAdminLogin = async (e?: React.FormEvent) => {
+    e?.preventDefault?.()
     setErrorMessage(null)
     setIsLoading(true)
 
@@ -261,33 +261,38 @@ export const Login: React.FC = () => {
           </div>
 
           {/* 乗務員・学校管理者用の直接ログイン（アコーディオン） */}
+          {/* TODO: [本番リリース時] パスワード認証を有効化すること（現在は試作段階のためバイパス中） */}
           <div className="pt-2 border-t border-slate-800/80">
             <details className="group">
               <summary className="text-[11px] font-bold text-slate-500 hover:text-slate-300 cursor-pointer list-none flex items-center justify-between py-1.5 select-none">
-                <span>乗務員・学校管理者用の直接ログインはこちら</span>
+                <span>乗務員・学校管理者用の直接ログイン（試作版：パスワード不要）</span>
                 <span className="text-xs transition-transform group-open:rotate-180 text-slate-400">▼</span>
               </summary>
 
               <div className="mt-4 space-y-4 pt-2">
                 {/* 乗務員PINログインフォーム */}
-                <form onSubmit={handleDriverLogin} className="p-3.5 bg-slate-950/70 border border-emerald-500/30 rounded-2xl space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
-                    <Bus className="h-4 w-4" />
-                    <span>スクールバス乗務員（PIN認証）</span>
+                <form noValidate onSubmit={handleDriverLogin} className="p-3.5 bg-slate-950/70 border border-emerald-500/30 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                      <Bus className="h-4 w-4" />
+                      <span>スクールバス乗務員</span>
+                    </div>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold border border-emerald-500/30">
+                      パスワード不要
+                    </span>
                   </div>
                   <div className="flex gap-2">
                     <input
                       type="password"
                       value={driverPin}
                       onChange={(e) => setDriverPin(e.target.value)}
-                      placeholder="PINコード（1234 等・未入力可）"
-                      maxLength={6}
-                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      placeholder="PINコード（試作版のため入力不要）"
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                     <button
                       type="submit"
                       disabled={isLoading}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black rounded-xl text-xs transition-all shrink-0"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-black rounded-xl text-xs transition-all shrink-0 cursor-pointer shadow-md shadow-emerald-900/30"
                     >
                       乗務員画面へ
                     </button>
@@ -295,24 +300,28 @@ export const Login: React.FC = () => {
                 </form>
 
                 {/* 学校管理者パスワードログインフォーム */}
-                <form onSubmit={handleAdminLogin} className="p-3.5 bg-slate-950/70 border border-purple-500/30 rounded-2xl space-y-2.5">
-                  <div className="flex items-center gap-2 text-xs font-bold text-purple-400">
-                    <ShieldCheck className="h-4 w-4" />
-                    <span>学校管理者（パスワード認証）</span>
+                <form noValidate onSubmit={handleAdminLogin} className="p-3.5 bg-slate-950/70 border border-purple-500/30 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-purple-400">
+                      <ShieldCheck className="h-4 w-4" />
+                      <span>学校管理者</span>
+                    </div>
+                    <span className="text-[10px] bg-purple-500/20 text-purple-300 px-2 py-0.5 rounded-full font-bold border border-purple-500/30">
+                      パスワード不要
+                    </span>
                   </div>
                   <div className="flex gap-2">
                     <input
                       type="password"
                       value={adminPassword}
                       onChange={(e) => setAdminPassword(e.target.value)}
-                      placeholder="管理者パスワード (admin)"
-                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                      required
+                      placeholder="パスワード（試作版のため入力不要）"
+                      className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
                     />
                     <button
                       type="submit"
                       disabled={isLoading}
-                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-black rounded-xl text-xs transition-all shrink-0"
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white font-black rounded-xl text-xs transition-all shrink-0 cursor-pointer shadow-md shadow-purple-900/30"
                     >
                       管理者画面へ
                     </button>

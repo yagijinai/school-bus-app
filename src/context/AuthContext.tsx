@@ -27,6 +27,9 @@ import {
   fetchAllMasterFromGAS,
   verifyStudentFromGAS
 } from '../lib/api/gas'
+import { verifyRolePassword } from '../lib/authUtils'
+
+export { verifyRolePassword, verifyPassword } from '../lib/authUtils'
 
 export interface DateScheduleStatus {
   date: string
@@ -53,7 +56,8 @@ interface AuthContextType {
   selectRole: (role: UserRole) => Promise<void>
   loginAsParent: (emailOrCode: string, verificationCode?: string) => Promise<{ success: boolean; found?: boolean; isRegistered?: boolean; error?: string }>
   loginAsDriver: (pinCode?: string) => Promise<{ success: boolean; error?: string }>
-  loginAsAdmin: (password: string) => Promise<{ success: boolean; error?: string }>
+  loginAsAdmin: (password?: string) => Promise<{ success: boolean; error?: string }>
+  verifyRolePassword: (role: 'admin' | 'driver', inputPassword?: string) => Promise<boolean>
   verifyStudentForRegistration: (codeOrEmail: string) => Promise<{ success: boolean; found: boolean; students?: Student[]; error?: string }>
   registerGuardianProfile: (guardianData: GuardianMasterRow) => Promise<boolean>
   registerParentProfile: (fullName: string, students: { studentId?: string; name: string; routeId: string; stopId: string; defaultMorningRide: boolean; defaultAfternoonSchedule: string | null }[]) => Promise<boolean>
@@ -631,6 +635,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ロール確定・切り替え処理（固定仕様：二択フロー①でGoogle認証後に実行）
   const selectRole = useCallback(async (role: UserRole): Promise<void> => {
+    // TODO: [本番リリース時] パスワード認証を有効化すること（現在は試作段階のためバイパス中）
+    if (role === 'admin' || role === 'driver') {
+      await verifyRolePassword(role)
+    }
+
     const currentEmail = (user?.email || (user as any)?.user_metadata?.email || profile?.email || 'yagijinai@gmail.com').trim().toLowerCase()
     const rawFullName = profile?.full_name || (user as any)?.user_metadata?.full_name || (user as any)?.user_metadata?.name
     const currentName = rawFullName || (currentEmail === 'yagijinai@gmail.com' ? 'てつ' : currentEmail.split('@')[0])
@@ -786,7 +795,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }
 
   // 2. ドライバーログイン
-  const loginAsDriver = async (_pinCode?: string): Promise<{ success: boolean; error?: string }> => {
+  const loginAsDriver = async (pinCode?: string): Promise<{ success: boolean; error?: string }> => {
+    // TODO: [本番リリース時] パスワード認証を有効化すること（現在は試作段階のためバイパス中）
+    const isVerified = await verifyRolePassword('driver', pinCode)
+    if (!isVerified) {
+      return { success: false, error: 'ドライバーPINコードが正しくありません。' }
+    }
+
     const driverId = 'driver-active-session'
     const driverUser: MockUser = {
       id: driverId,
@@ -818,14 +833,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }
 
   // 3. 管理者ログイン
-  const loginAsAdmin = async (password: string): Promise<{ success: boolean; error?: string }> => {
-    const cleanPass = password.trim()
-    if (!cleanPass) {
-      return { success: false, error: '管理者パスワードを入力してください。' }
-    }
-
-    const validPasswords = ['admin', '1234', 'admin1234', 'school', 'school2026', 'bus2026']
-    if (!validPasswords.includes(cleanPass.toLowerCase()) && cleanPass !== 'admin') {
+  const loginAsAdmin = async (password?: string): Promise<{ success: boolean; error?: string }> => {
+    // TODO: [本番リリース時] パスワード認証を有効化すること（現在は試作段階のためバイパス中）
+    const isVerified = await verifyRolePassword('admin', password)
+    if (!isVerified) {
       return { success: false, error: '管理者パスワードが正しくありません。' }
     }
 
@@ -1484,6 +1495,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginAsParent,
         loginAsDriver,
         loginAsAdmin,
+        verifyRolePassword,
         verifyStudentForRegistration,
         registerGuardianProfile,
         registerParentProfile,
