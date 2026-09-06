@@ -2,6 +2,7 @@ import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { Login } from './pages/Login'
+import { RoleSelect } from './pages/RoleSelect'
 import { Dashboard as ParentDashboard } from './pages/parent/Dashboard'
 import { DriverDashboard } from './pages/driver/Dashboard'
 import { AdminDashboard } from './pages/admin/Dashboard'
@@ -38,18 +39,10 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles?: strin
   return <>{children}</>
 }
 
-// パブリックルート（ログイン済みならダッシュボードへ）
+// パブリックルート（固定仕様：起動時は自動遷移させず二択画面を常に表示）
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, profile, loading } = useAuth()
-
+  const { loading } = useAuth()
   if (loading) return null
-
-  if (user) {
-    if (profile?.role === 'driver') return <Navigate to="/driver/dashboard" replace />
-    if (profile?.role === 'admin') return <Navigate to="/admin/dashboard" replace />
-    return <Navigate to="/parent/dashboard" replace />
-  }
-
   return <>{children}</>
 }
 
@@ -79,14 +72,18 @@ const AppRoutes: React.FC = () => {
 
   return (
     <Routes>
+      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+      
+      {/* Google認証後のロール（役割）選択画面 */}
       <Route 
-        path="/" 
+        path="/select-role" 
         element={
-          user ? <Navigate to="/parent/dashboard" replace /> : <Navigate to="/login" replace />
+          <ProtectedRoute>
+            <RoleSelect />
+          </ProtectedRoute>
         } 
       />
-
-      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
       
       {/* 保護者ダッシュボード */}
       <Route 

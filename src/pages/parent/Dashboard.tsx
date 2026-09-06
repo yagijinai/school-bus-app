@@ -102,8 +102,9 @@ export const Dashboard: React.FC = () => {
     }
   }, [students, selectedStudentId])
 
-  // デバッグログ: ダッシュボード描画時の生徒データ可視化
-  console.log('[Dashboard:RENDER] 🎨 レンダリング時の生徒データ:', {
+  // デバッグログ: ダッシュボード描画時の生徒データ可視化（最重要確認ログ）
+  console.log('[Dashboard] Current students in view:', authStudents)
+  console.log('[Dashboard:RENDER] 🎨 レンダリング時の確定生徒データ:', {
     targetEmail,
     studentsCount: students.length,
     studentsList: students.map(s => ({ id: s.id, name: s.name, busStop: s.bus_stop_name })),

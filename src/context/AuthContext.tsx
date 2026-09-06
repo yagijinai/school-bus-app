@@ -50,6 +50,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>
   signOut: () => Promise<void>
   signInDemoUser: (role: 'parent' | 'driver' | 'admin', isNew?: boolean) => void
+  selectRole: (role: UserRole) => Promise<void>
   loginAsParent: (emailOrCode: string, verificationCode?: string) => Promise<{ success: boolean; found?: boolean; isRegistered?: boolean; error?: string }>
   loginAsDriver: (pinCode?: string) => Promise<{ success: boolean; error?: string }>
   loginAsAdmin: (password: string) => Promise<{ success: boolean; error?: string }>
@@ -506,6 +507,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             window.history.replaceState(null, '', window.location.pathname + window.location.search)
           }
 
+          // 固定仕様：Google認証完了後はロール選択画面（/select-role）へ誘導
+          if (window.location.pathname === '/login' || window.location.pathname === '/') {
+            window.location.href = '/select-role'
+          }
+
           console.log('[AuthContext] 🔓 OAuth非同期処理チェーン100%完了: ローディングロックを解除します')
         } catch (chainErr) {
           console.error('[AuthContext] ❌ OAuthチェーン処理エラー:', chainErr)
@@ -519,8 +525,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 【B】通常時: ローカルセッションまたは初期セッションの復元
       try {
+        const isRootOrLogin = typeof window !== 'undefined' && (window.location.pathname === '/' || window.location.pathname === '/login')
         const savedSessionStr = localStorage.getItem('school_bus_active_session_v2')
-        if (savedSessionStr) {
+        if (savedSessionStr && !isRootOrLogin) {
           try {
             const saved = JSON.parse(savedSessionStr)
             if (saved && saved.user && saved.profile) {
@@ -621,6 +628,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false)
     }
   }
+
+  // ロール確定・切り替え処理（固定仕様：二択フロー①でGoogle認証後に実行）
+  const selectRole = useCallback(async (role: UserRole): Promise<void> => {
+    const currentEmail = (user?.email || (user as any)?.user_metadata?.email || profile?.email || 'yagijinai@gmail.com').trim().toLowerCase()
+    const rawFullName = profile?.full_name || (user as any)?.user_metadata?.full_name || (user as any)?.user_metadata?.name
+    const currentName = rawFullName || (currentEmail === 'yagijinai@gmail.com' ? 'てつ' : currentEmail.split('@')[0])
+
+    const updatedProfile: UserProfile = {
+      id: user?.id || currentEmail,
+      email: currentEmail,
+      full_name: currentName,
+      role: role,
+      created_at: profile?.created_at || new Date().toISOString()
+    }
+
+    const updatedUser: MockUser = {
+      id: user?.id || currentEmail,
+      email: currentEmail,
+      user_metadata: {
+        email: currentEmail,
+        full_name: currentName,
+        avatar_url: (user as any)?.user_metadata?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
+      }
+    }
+
+    setUser(updatedUser)
+    setProfile(updatedProfile)
+    setIsRegistered(true)
+
+    const nextPath = role === 'parent' ? '/parent/dashboard' : role === 'driver' ? '/driver/dashboard' : '/admin/dashboard'
+
+    // 直前セッションとしてlocalStorageに保存（次回、二択②で直接復帰可能にする）
+    localStorage.setItem('school_bus_active_session_v2', JSON.stringify({
+      user: updatedUser,
+      profile: updatedProfile,
+      lastPath: nextPath,
+      savedAt: new Date().toISOString()
+    }))
+
+    if (role === 'parent') {
+      await syncGuardianData(currentEmail)
+    }
+  }, [user, profile, syncGuardianData])
 
   // 1. 保護者ログイン (メールアドレスを基に GAS action: "getGuardianData" を即時実行)
   const loginAsParent = async (emailOrCode: string, _verificationCode?: string): Promise<{ success: boolean; found?: boolean; isRegistered?: boolean; error?: string }> => {
@@ -1430,6 +1480,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signInWithGoogle,
         signOut,
         signInDemoUser,
+        selectRole,
         loginAsParent,
         loginAsDriver,
         loginAsAdmin,
