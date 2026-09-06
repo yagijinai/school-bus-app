@@ -29,17 +29,17 @@ export interface BusStopMasterRow {
 
 /**
  * 3. 「運行予定カレンダー」
- * A: ID / B: 日付 / C: 生徒名 / D: 登校ステータス / E: 下校ステータス / F: 下校1便 / G: 下校2便 / H: 下校3便 / I: 備考 / J: 更新日時 / K: 保護者メールアドレス
+ * A: ID（通し番号数値） / B: 日付（YYYY/MM/DD） / C: 生徒名 / D: 登校ステータス（'乗る' or ''） / E: 下校ステータス（乗らない場合のみ'乗らない'、乗る場合は''） / F: 下校1便（運行時刻 or ''） / G: 下校2便（運行時刻 or ''） / H: 下校3便（運行時刻 or ''） / I: 備考 / J: 更新日時（YYYY/MM/DD HH:mm:ss） / K: 保護者メールアドレス
  */
 export interface OperationScheduleRow {
-  id: string
+  id: string | number
   date: string
   student_name: string
-  morning_status: string // '乗車' | '欠席' | '乗る' | '乗らない'
-  afternoon_status: string // '乗車' | '欠席' | '乗る' | '乗らない'
-  trip_1?: string | boolean | null // 下校1便
-  trip_2?: string | boolean | null // 下校2便
-  trip_3?: string | boolean | null // 下校3便
+  morning_status: string // '乗る' | ''
+  afternoon_status: string // '乗らない' | ''
+  trip_1?: string | boolean | null // 下校1便運行時刻（例: '15:30'）または空文字
+  trip_2?: string | boolean | null // 下校2便運行時刻（例: '16:30'）または空文字
+  trip_3?: string | boolean | null // 下校3便運行時刻（例: '17:30'）または空文字
   note?: string | null
   updated_at: string
   guardian_email: string

@@ -398,78 +398,173 @@ export async function verifyStudentFromGAS(codeOrEmail: string): Promise<{
 }
 
 /**
+ * 日付文字列を確実に YYYY/MM/DD 形式（スラッシュ区切り）に変換
+ */
+export function formatDateToSlash(dateStr: string): string {
+  if (!dateStr) return ''
+  const trimmed = dateStr.trim()
+  const cleaned = trimmed.replace(/-/g, '/')
+  const parts = cleaned.split('/')
+  if (parts.length === 3) {
+    const y = parts[0]
+    const m = parts[1].padStart(2, '0')
+    const d = parts[2].padStart(2, '0')
+    return `${y}/${m}/${d}`
+  }
+  return cleaned
+}
+
+/**
+ * 現在日時を YYYY/MM/DD HH:mm:ss 形式で取得
+ */
+export function formatCurrentDateTimeJ(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const y = d.getFullYear()
+  const m = pad(d.getMonth() + 1)
+  const day = pad(d.getDate())
+  const hh = pad(d.getHours())
+  const mm = pad(d.getMinutes())
+  const ss = pad(d.getSeconds())
+  return `${y}/${m}/${day} ${hh}:${mm}:${ss}`
+}
+
+/**
+ * 下校便の選択から運行時刻文字列（例: "15:30"）を解決
+ */
+export function resolveTripDepartureTime(tripNameOrTime: string | null | undefined, tripNum: 1 | 2 | 3): string {
+  if (!tripNameOrTime) return ''
+  const str = String(tripNameOrTime).trim()
+  if (str === '乗らない' || str === '不要' || str === '') return ''
+
+  // 1. 文字列内に時刻パターン (HH:mm) が含まれている場合
+  const timeMatch = str.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/)
+
+  // 便名の合致判定
+  const isTargetTrip = str.includes(`${tripNum}便`) || str.includes(`下校${tripNum}`) || str.includes(`便${tripNum}`)
+
+  if (isTargetTrip) {
+    if (timeMatch) return timeMatch[0]
+    // 便番号ごとの標準時刻デフォルト
+    if (tripNum === 1) return '15:00'
+    if (tripNum === 2) return '16:00'
+    if (tripNum === 3) return '17:00'
+  }
+
+  // 便名を含まず時刻パターンのみの場合（例: "15:30"）
+  if (!str.includes('便') && timeMatch) {
+    const hour = parseInt(timeMatch[1], 10)
+    if (tripNum === 1 && hour <= 15) return timeMatch[0]
+    if (tripNum === 2 && hour === 16) return timeMatch[0]
+    if (tripNum === 3 && hour >= 17) return timeMatch[0]
+  }
+
+  return ''
+}
+
+/**
  * 4. 予約・スケジュール個別保存（action: "saveReservation" / "saveSchedule"）
- * CORS・リダイレクト対策済みハイブリッド通信
+ * スプレッドシート「運行予定カレンダー」確定列仕様に完全合致
+ * A列: ID (通し番号数値) / B列: 日付 (YYYY/MM/DD) / C列: 生徒名 / D列: 登校ステータス ('乗る' or '')
+ * E列: 下校ステータス ('乗らない' or '') / F列: 下校1便 (運行時刻 or '') / G列: 下校2便 (運行時刻 or '')
+ * H列: 下校3便 (運行時刻 or '') / I列: 備考 / J列: 更新日時 (YYYY/MM/DD HH:mm:ss) / K列: 保護者メールアドレス
  */
 export interface SaveReservationParams {
   parentEmail: string
   studentId: string
   studentName: string
-  date: string
-  morningTrip: '乗車' | '不要' | boolean
-  afternoonTrip: string | null
+  date: string // YYYY-MM-DD または YYYY/MM/DD
+  morningTrip: '乗車' | '不要' | '乗る' | '乗らない' | boolean
+  afternoonTrip: string | null // '下校1便' | '下校2便' | '下校3便' | '乗らない' | '15:30' 等
   note?: string | null
+  departureTime?: string | null // 任意で特定時刻を指定する場合
 }
 
 export async function saveReservation(params: SaveReservationParams): Promise<{ success: boolean; data?: any; message?: string; error?: string }> {
+  // B列: 日付 (YYYY/MM/DD形式)
+  const slashDate = formatDateToSlash(params.date)
+  
+  // D列: 登校ステータス ('乗る'、または空文字 "")
   const isMorningRide = typeof params.morningTrip === 'boolean'
     ? params.morningTrip
     : (String(params.morningTrip) === '乗車' || String(params.morningTrip) === '乗る')
-  
-  const morningText = isMorningRide ? '乗車' : '不要'
-  const morningStatusText = isMorningRide ? '乗る' : '乗らない'
-  
-  let afternoonText = params.afternoonTrip || '不要'
-  if (afternoonText === '乗らない' || !params.afternoonTrip) {
-    afternoonText = '不要'
+  const morningStatus = isMorningRide ? '乗る' : ''
+
+  // F, G, H列: 下校1便〜3便の運行時刻（または空文字 ""）
+  let afternoonText = params.afternoonTrip || ''
+  if (afternoonText === '不要' || afternoonText === '乗車しない') {
+    afternoonText = '乗らない'
   }
-  const isAfternoonRide = afternoonText !== '不要'
-  const afternoonStatusText = isAfternoonRide ? '乗る' : '乗らない'
 
-  const trip1 = afternoonText.includes('1便') ? '〇' : ''
-  const trip2 = afternoonText.includes('2便') ? '〇' : ''
-  const trip3 = afternoonText.includes('3便') ? '〇' : ''
-  const trip4 = afternoonText.includes('4便') ? '〇' : ''
-  const trip5 = afternoonText.includes('5便') ? '〇' : ''
+  let trip1Time = ''
+  let trip2Time = ''
+  let trip3Time = ''
 
-  const id = `SCH-${params.date}-${params.studentName}`
+  if (afternoonText !== '乗らない' && afternoonText !== '') {
+    trip1Time = resolveTripDepartureTime(params.departureTime || afternoonText, 1)
+    trip2Time = resolveTripDepartureTime(params.departureTime || afternoonText, 2)
+    trip3Time = resolveTripDepartureTime(params.departureTime || afternoonText, 3)
+
+    // どの便にも該当しないが乗車が指定されている場合、デフォルトで下校1便に割り当て
+    if (!trip1Time && !trip2Time && !trip3Time) {
+      trip1Time = params.departureTime || '15:00'
+    }
+  }
+
+  // E列: 下校ステータス（乗らない場合のみ '乗らない'、下校便に乗る場合は空文字 ""）
+  const isAfternoonRide = (trip1Time !== '' || trip2Time !== '' || trip3Time !== '')
+  const afternoonStatus = isAfternoonRide ? '' : '乗らない'
+
+  // I列: 備考
+  const noteText = (params.note || '').trim()
+
+  // J列: 更新日時 (YYYY/MM/DD HH:mm:ss)
+  const updatedAt = formatCurrentDateTimeJ()
+
+  // K列: 保護者メールアドレス
   const email = (params.parentEmail || '').trim().toLowerCase()
+  const studentName = params.studentName.trim()
 
   const payload = {
     action: 'saveReservation',
+    sheetName: '運行予定カレンダー',
+    targetSheet: '運行予定カレンダー',
     parentEmail: email,
     studentId: params.studentId,
-    studentName: params.studentName,
-    date: params.date,
-    morningTrip: morningText,
+    studentName: studentName,
+    date: slashDate,
+    rawDate: params.date,
+    morningTrip: morningStatus,
     afternoonTrip: afternoonText,
-    note: params.note || '',
+    note: noteText,
     
-    // スプレッドシート互換パラメータ
-    id: id,
-    morningStatus: morningStatusText,
-    afternoonStatus: afternoonStatusText,
-    trip1,
-    trip2,
-    trip3,
-    trip4,
-    trip5,
-    guardianEmail: email,
-    
-    // 日本語カラム名互換
-    'ID': id,
-    '日付': params.date,
-    '生徒名': params.studentName,
+    // スプレッドシート確定列仕様（A列〜K列完全対応）
+    'ID': '', // GAS側で新規行は連番数値自動採番（最終行+1または行番号-1）、既存行は維持
+    '日付': slashDate,
+    '生徒名': studentName,
+    '登校ステータス': morningStatus,
+    '下校ステータス': afternoonStatus,
+    '下校1便': trip1Time,
+    '下校2便': trip2Time,
+    '下校3便': trip3Time,
+    '備考': noteText,
+    '更新日時': updatedAt,
     '保護者メールアドレス': email,
-    '登校ステータス': morningStatusText,
-    '下校ステータス': afternoonStatusText,
-    '下校1便': trip1,
-    '下校2便': trip2,
-    '下校3便': trip3,
-    '備考': params.note || ''
+
+    // 英名プロパティ互換（GAS既存ロジック用）
+    id: `SCH-${slashDate.replace(/\//g, '-')}-${studentName}`,
+    morningStatus: morningStatus,
+    afternoonStatus: afternoonStatus,
+    trip1: trip1Time,
+    trip2: trip2Time,
+    trip3: trip3Time,
+    trip1Time: trip1Time,
+    trip2Time: trip2Time,
+    trip3Time: trip3Time,
+    guardianEmail: email,
+    updatedAt: updatedAt
   }
 
-  // 要件③: console.log('[ReservationSave] 送信データ:', payload)
   console.log('[ReservationSave] 送信データ:', payload)
 
   let responseData: any = null
@@ -489,13 +584,18 @@ export async function saveReservation(params: SaveReservationParams): Promise<{ 
     try {
       const getParams: Record<string, string> = {
         action: 'saveReservation',
+        sheetName: '運行予定カレンダー',
         parentEmail: email,
         studentId: params.studentId,
-        studentName: params.studentName,
-        date: params.date,
-        morningTrip: morningText,
-        afternoonTrip: afternoonText,
-        note: params.note || ''
+        studentName: studentName,
+        date: slashDate,
+        morningStatus: morningStatus,
+        afternoonStatus: afternoonStatus,
+        trip1: trip1Time,
+        trip2: trip2Time,
+        trip3: trip3Time,
+        note: noteText,
+        updatedAt: updatedAt
       }
       const getRes = await sendGASGetRequest(getParams)
       if (getRes.success) {
@@ -507,7 +607,6 @@ export async function saveReservation(params: SaveReservationParams): Promise<{ 
     }
   }
 
-  // 要件③: console.log('[ReservationSave] GAS受信レスポンス:', responseData)
   console.log('[ReservationSave] GAS受信レスポンス:', responseData)
 
   return {
@@ -543,7 +642,7 @@ export async function saveSchedule(scheduleData: {
     studentId: scheduleData.studentName,
     studentName: scheduleData.studentName,
     date: scheduleData.date,
-    morningTrip: scheduleData.morningStatus ? '乗車' : '不要',
+    morningTrip: scheduleData.morningStatus ? '乗る' : '乗らない',
     afternoonTrip: aftSchedule,
     note: scheduleData.note
   })
@@ -551,6 +650,7 @@ export async function saveSchedule(scheduleData: {
 
 /**
  * 5. 予約一括保存（action: "saveBatchSchedules"）
+ * スプレッドシート「運行予定カレンダー」確定列仕様に完全合致
  */
 export async function saveBatchSchedules(schedules: {
   date: string
@@ -561,56 +661,88 @@ export async function saveBatchSchedules(schedules: {
   guardianEmail: string
   studentId?: string
 }[]): Promise<{ success: boolean; count?: number; error?: string }> {
+  const updatedAt = formatCurrentDateTimeJ()
+
   const formatted = schedules.map(s => {
-    const isMorning = s.morningStatus
-    const morningText = isMorning ? '乗車' : '不要'
-    const morningStatusText = isMorning ? '乗る' : '乗らない'
-    let afternoonText = s.afternoonSchedule || '不要'
-    if (afternoonText === '乗らない' || !s.afternoonSchedule) {
-      afternoonText = '不要'
+    // B列: 日付 (YYYY/MM/DD形式)
+    const slashDate = formatDateToSlash(s.date)
+
+    // D列: 登校ステータス ('乗る'、または空文字 "")
+    const morningStatus = s.morningStatus ? '乗る' : ''
+
+    // F, G, H列: 下校1便〜3便の運行時刻
+    let aftText = s.afternoonSchedule || ''
+    if (aftText === '不要' || aftText === '乗車しない') {
+      aftText = '乗らない'
     }
-    const isAfternoon = afternoonText !== '不要'
-    const afternoonStatusText = isAfternoon ? '乗る' : '乗らない'
+
+    let trip1Time = ''
+    let trip2Time = ''
+    let trip3Time = ''
+
+    if (aftText !== '乗らない' && aftText !== '') {
+      trip1Time = resolveTripDepartureTime(aftText, 1)
+      trip2Time = resolveTripDepartureTime(aftText, 2)
+      trip3Time = resolveTripDepartureTime(aftText, 3)
+
+      if (!trip1Time && !trip2Time && !trip3Time) {
+        trip1Time = '15:00'
+      }
+    }
+
+    // E列: 下校ステータス（乗らない場合のみ '乗らない'、下校便に乗る場合は空文字 ""）
+    const isAfternoonRide = (trip1Time !== '' || trip2Time !== '' || trip3Time !== '')
+    const afternoonStatus = isAfternoonRide ? '' : '乗らない'
+
+    const email = s.guardianEmail.trim().toLowerCase()
+    const studentName = s.studentName.trim()
+    const noteText = (s.note || '').trim()
 
     return {
-      id: `SCH-${s.date}-${s.studentName}`,
-      date: s.date,
-      studentId: s.studentId || s.studentName,
-      studentName: s.studentName,
-      morningTrip: morningText,
-      afternoonTrip: afternoonText,
-      morningStatus: morningStatusText,
-      afternoonStatus: afternoonStatusText,
-      afternoonSchedule: afternoonText === '不要' ? null : afternoonText,
-      trip1: afternoonText.includes('1便') ? '〇' : '',
-      trip2: afternoonText.includes('2便') ? '〇' : '',
-      trip3: afternoonText.includes('3便') ? '〇' : '',
-      trip4: afternoonText.includes('4便') ? '〇' : '',
-      trip5: afternoonText.includes('5便') ? '〇' : '',
-      note: s.note || '',
-      parentEmail: s.guardianEmail.trim().toLowerCase(),
-      guardianEmail: s.guardianEmail.trim().toLowerCase(),
+      id: `SCH-${slashDate.replace(/\//g, '-')}-${studentName}`,
+      date: slashDate,
+      rawDate: s.date,
+      studentId: s.studentId || studentName,
+      studentName: studentName,
+      morningTrip: morningStatus,
+      afternoonTrip: aftText,
+      morningStatus: morningStatus,
+      afternoonStatus: afternoonStatus,
+      afternoonSchedule: isAfternoonRide ? (trip1Time ? '下校1便' : trip2Time ? '下校2便' : '下校3便') : null,
+      trip1: trip1Time,
+      trip2: trip2Time,
+      trip3: trip3Time,
+      trip1Time: trip1Time,
+      trip2Time: trip2Time,
+      trip3Time: trip3Time,
+      note: noteText,
+      parentEmail: email,
+      guardianEmail: email,
+      updatedAt: updatedAt,
 
-      'ID': `SCH-${s.date}-${s.studentName}`,
-      '日付': s.date,
-      '生徒名': s.studentName,
-      '登校ステータス': morningStatusText,
-      '下校ステータス': afternoonStatusText,
-      '下校1便': afternoonText.includes('1便') ? '〇' : '',
-      '下校2便': afternoonText.includes('2便') ? '〇' : '',
-      '下校3便': afternoonText.includes('3便') ? '〇' : '',
-      '備考': s.note || '',
-      '保護者メールアドレス': s.guardianEmail.trim().toLowerCase()
+      // スプレッドシート確定列仕様（A列〜K列完全対応）
+      'ID': '', // GAS側で新規行は連番数値自動採番、既存行は維持
+      '日付': slashDate,
+      '生徒名': studentName,
+      '登校ステータス': morningStatus,
+      '下校ステータス': afternoonStatus,
+      '下校1便': trip1Time,
+      '下校2便': trip2Time,
+      '下校3便': trip3Time,
+      '備考': noteText,
+      '更新日時': updatedAt,
+      '保護者メールアドレス': email
     }
   })
 
   const payload = {
     action: 'saveBatchSchedules',
+    sheetName: '運行予定カレンダー',
+    targetSheet: '運行予定カレンダー',
     schedules: formatted,
     reservations: formatted
   }
 
-  // 要件③: console.log('[ReservationSave] 送信データ (一括保存):', payload)
   console.log('[ReservationSave] 送信データ:', payload)
   
   let responseData: any = null
@@ -623,7 +755,6 @@ export async function saveBatchSchedules(schedules: {
     console.warn('[ReservationSave] 一括POSTエラー:', err)
   }
 
-  // 要件③: console.log('[ReservationSave] GAS受信レスポンス:', responseData)
   console.log('[ReservationSave] GAS受信レスポンス:', responseData)
 
   return { success: isSuccess || true, count: formatted.length }
@@ -654,36 +785,54 @@ export async function fetchBusStopsFromGAS(): Promise<BusStop[]> {
 
 /**
  * 7. 運行予定カレンダー取得（action: "getSchedules"）- GET通信対応
+ * スプレッドシート「運行予定カレンダー」確定列仕様からのデータ復元
  */
 export async function fetchSchedulesFromGAS(email?: string): Promise<Reservation[]> {
   try {
     const res = await sendGASGetRequest<OperationScheduleRow[]>({
       action: 'getSchedules',
+      sheetName: '運行予定カレンダー',
       email: email ? email.trim().toLowerCase() : ''
     })
 
     if (res.success && Array.isArray(res.data)) {
       return res.data.map((row: any, idx: number) => {
-        const studentName = row['生徒名'] || row.studentName || ''
-        const date = row['日付'] || row.date || ''
+        const studentName = String(row['生徒名'] || row.studentName || row.student_name || '').trim()
+        const rawDate = String(row['日付'] || row.date || '').trim()
+        // アプリ内比較のためにハイフン形式 (YYYY-MM-DD) に正規化
+        const normalizedDate = rawDate.replace(/\//g, '-')
+
+        // F, G, H列の運行時刻またはフラグ判定
+        const trip1Val = String(row['下校1便'] || row.trip1 || row.trip_1 || '').trim()
+        const trip2Val = String(row['下校2便'] || row.trip2 || row.trip_2 || '').trim()
+        const trip3Val = String(row['下校3便'] || row.trip3 || row.trip_3 || '').trim()
+
+        const hasTrip1 = trip1Val !== '' && trip1Val !== '乗らない' && trip1Val !== '不要'
+        const hasTrip2 = trip2Val !== '' && trip2Val !== '乗らない' && trip2Val !== '不要'
+        const hasTrip3 = trip3Val !== '' && trip3Val !== '乗らない' && trip3Val !== '不要'
+
         let aftSchedule: string | null = null
-        if (row['下校1便'] === '〇' || row.trip1 === '〇') aftSchedule = '下校1便'
-        else if (row['下校2便'] === '〇' || row.trip2 === '〇') aftSchedule = '下校2便'
-        else if (row['下校3便'] === '〇' || row.trip3 === '〇') aftSchedule = '下校3便'
+        if (hasTrip1) aftSchedule = '下校1便'
+        else if (hasTrip2) aftSchedule = '下校2便'
+        else if (hasTrip3) aftSchedule = '下校3便'
+
+        // D列: 登校ステータス ('乗る' の場合に乗車)
+        const morningVal = String(row['登校ステータス'] || row.morning_status || row.morningStatus || '').trim()
+        const isMorningRide = morningVal === '乗る' || morningVal === '乗車' || morningVal === 'true'
 
         return {
-          id: row['ID'] || row.id || `sch-${idx}`,
+          id: String(row['ID'] || row.id || `sch-${idx + 1}`),
           student_id: studentName,
           student_name: studentName,
-          date: date,
-          morning_status: row['登校ステータス'] === '乗る' || row.morningStatus === '乗る' || row.morningStatus === true,
+          date: normalizedDate,
+          morning_status: isMorningRide,
           afternoon_schedule: aftSchedule,
-          trip_1: row['下校1便'] === '〇' || row.trip1 === '〇',
-          trip_2: row['下校2便'] === '〇' || row.trip2 === '〇',
-          trip_3: row['下校3便'] === '〇' || row.trip3 === '〇',
+          trip_1: hasTrip1,
+          trip_2: hasTrip2,
+          trip_3: hasTrip3,
           note: row['備考'] || row.note || null,
-          guardian_email: (row['保護者メールアドレス'] || row.guardianEmail || '').toLowerCase(),
-          updated_at: row['更新日時'] || row.updated_at || new Date().toISOString()
+          guardian_email: String(row['保護者メールアドレス'] || row.guardianEmail || row.guardian_email || '').trim().toLowerCase(),
+          updated_at: String(row['更新日時'] || row.updated_at || row.updatedAt || new Date().toISOString())
         }
       })
     }
