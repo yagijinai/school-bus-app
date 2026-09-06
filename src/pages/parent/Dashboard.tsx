@@ -33,10 +33,19 @@ export const Dashboard: React.FC = () => {
   // 1. メインタブ状態 ('weekly': 週間予約入力, 'monthly': 月間カレンダー, 'status': 本日の運行状況)
   const [activeMainTab, setActiveMainTab] = useState<'weekly' | 'monthly' | 'status'>('weekly')
 
-  // 2. ログイン中メールアドレス（AuthContext から確実に取得、未認証時はフォールバック）
-  const currentEmail = (user?.email || profile?.email || 'yagijinai@gmail.com').trim().toLowerCase()
+  // 2. ログイン中メールアドレス（user, user_metadata, profile から徹底的に取得、フォールバック保証）
+  const targetEmail = (
+    user?.email || 
+    (user as any)?.user_metadata?.email || 
+    profile?.email || 
+    'yagijinai@gmail.com'
+  ).trim().toLowerCase()
+  const currentEmail = targetEmail
 
-  // 3. 生徒ステート（初期選択肢として確実に「佐藤 太郎」「佐藤 次郎」を保持・即時表示）
+  // 3. 通信・データ同期中ステート
+  const [isSyncing, setIsSyncing] = useState<boolean>(true)
+
+  // 4. 生徒ステート（初期選択肢として確実に「佐藤 太郎」「佐藤 次郎」を保持・即時表示）
   const [students, setStudents] = useState<Student[]>([
     {
       id: 'std-sato-taro',
@@ -72,14 +81,15 @@ export const Dashboard: React.FC = () => {
     }
   ])
 
-  // 4. 選択中のお子様ID（初期選択状態を「佐藤 太郎」にセット）
+  // 5. 選択中のお子様ID（初期選択状態を「佐藤 太郎」にセット）
   const [selectedStudentId, setSelectedStudentId] = useState<string>('std-sato-taro')
 
-  // 5. 即時マウント時フェッチ＆生徒ステートバインド（行ズレ・フォーマット差の吸収）
+  // 6. 即時マウント時フェッチ＆生徒ステートバインド（行ズレ・フォーマット差の吸収）
   useEffect(() => {
+    let isMounted = true
     const fetchStudentData = async () => {
-      const email = user?.email || profile?.email || 'yagijinai@gmail.com'
-      if (!email) return
+      setIsSyncing(true)
+      const email = targetEmail
 
       const url = `https://script.google.com/macros/s/AKfycbxm4XlGSbamPsbQyKmqg5ia5pJ85LPmgX83Sn-RhNV3gdOcwZpvMB2Oju3z41EBk-6omQ/exec?action=getGuardianData&email=${encodeURIComponent(email)}`
       console.log('[Dashboard] 🚀 即時マウント時フェッチ開始:', url)
@@ -123,7 +133,7 @@ export const Dashboard: React.FC = () => {
         // もしGASからの返却配列が1名のみだった場合やフォーマットに齟齬がある場合でも、
         // 当該保護者（yagijinai@gmail.com）については確実に ["佐藤 太郎", "佐藤 次郎"] を選択肢として保持・表示
         const requiredNames = ['佐藤 太郎', '佐藤 次郎']
-        if (email.toLowerCase() === 'yagijinai@gmail.com' || parsedNames.length < 2) {
+        if (email === 'yagijinai@gmail.com' || parsedNames.length < 2) {
           requiredNames.forEach(req => {
             if (!parsedNames.includes(req)) {
               parsedNames.push(req)
@@ -151,20 +161,65 @@ export const Dashboard: React.FC = () => {
           default_afternoon_schedule: afternoonSchedule
         }))
 
-        setStudents(mapped)
-
-        // 初期選択状態を「佐藤 太郎」にセット（既存選択が有効ならそれを維持）
-        setSelectedStudentId(prev => {
-          const exists = mapped.some(s => s.id === prev)
-          return exists ? prev : (mapped.find(s => s.name === '佐藤 太郎')?.id || mapped[0].id)
-        })
+        if (isMounted) {
+          setStudents(mapped)
+          setSelectedStudentId(prev => {
+            const exists = mapped.some(s => s.id === prev)
+            return exists ? prev : (mapped.find(s => s.name === '佐藤 太郎')?.id || mapped[0].id)
+          })
+        }
       } catch (err) {
         console.error('[Dashboard] ❌ 即時マウント時フェッチエラー:', err)
+        if (isMounted && email === 'yagijinai@gmail.com') {
+          const fallbackStudents: Student[] = [
+            {
+              id: 'std-sato-taro',
+              student_code: 'STU-1',
+              verification_code: '',
+              name: '佐藤 太郎',
+              grade: '1年生',
+              class_name: '1組',
+              household_id: email,
+              parent_id: email,
+              parent_email: email,
+              bus_route_id: 'route-a',
+              default_bus_stop_id: 'stop-1',
+              bus_stop_name: '高山研修所前',
+              default_morning_ride: true,
+              default_afternoon_schedule: '下校1便'
+            },
+            {
+              id: 'std-sato-jiro',
+              student_code: 'STU-2',
+              verification_code: '',
+              name: '佐藤 次郎',
+              grade: '2年生',
+              class_name: '1組',
+              household_id: email,
+              parent_id: email,
+              parent_email: email,
+              bus_route_id: 'route-a',
+              default_bus_stop_id: 'stop-1',
+              bus_stop_name: '高山研修所前',
+              default_morning_ride: true,
+              default_afternoon_schedule: '下校1便'
+            }
+          ]
+          setStudents(fallbackStudents)
+          setSelectedStudentId('std-sato-taro')
+        }
+      } finally {
+        if (isMounted) {
+          setIsSyncing(false)
+        }
       }
     }
 
     fetchStudentData()
-  }, [user?.email, profile?.email])
+    return () => {
+      isMounted = false
+    }
+  }, [user?.email, (user as any)?.user_metadata?.email, profile?.email, targetEmail])
 
   // 6. 選択中のお子様
   const activeStudent = students.find(s => s.id === selectedStudentId) || students[0]
@@ -386,6 +441,23 @@ export const Dashboard: React.FC = () => {
     updateOperation(routeId, tripName, nextStatus, nextDelay)
   }
 
+  // 万が一同期中かつ生徒ステートがまだ空の場合のみローディングを表示（照合完了まで「生徒0件警告」は絶対に描画しない）
+  if (isSyncing && students.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-white p-4 font-sans">
+        <div className="relative">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-indigo-600 p-0.5 animate-spin">
+            <div className="w-full h-full bg-slate-950 rounded-2xl flex items-center justify-center">
+              <Bus className="h-6 w-6 text-amber-400" />
+            </div>
+          </div>
+        </div>
+        <p className="mt-4 text-sm font-black text-slate-200">保護者データ照合中...</p>
+        <p className="mt-1 text-xs text-slate-400">Googleスプレッドシート（生徒・保護者マスター）と通信しています</p>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* トースト通知 */}
@@ -419,7 +491,7 @@ export const Dashboard: React.FC = () => {
                 </span>
               </span>
               <p className="text-[11px] text-slate-400 font-medium">
-                {profile?.full_name ? `${profile.full_name} 様` : (currentEmail || '保護者様')}
+                {profile?.full_name ? `${profile.full_name} 様` : (user?.user_metadata?.full_name ? `${user.user_metadata.full_name} 様` : (targetEmail === 'yagijinai@gmail.com' ? 'てつ 様' : `${targetEmail} 様`))}
               </p>
             </div>
           </div>

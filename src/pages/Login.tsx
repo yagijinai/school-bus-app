@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { 
   Bus, User, ShieldCheck, 
   ArrowRight, AlertCircle, 
-  Lock, RefreshCw, Smartphone
+  Lock, RefreshCw, Smartphone, Sparkles
 } from 'lucide-react'
 
 type LoginRoleTab = 'parent' | 'driver' | 'admin'
@@ -295,19 +295,21 @@ export const Login: React.FC = () => {
                 ※ 初めてご利用の方も、まず上記のGoogleログインを行ってください。ログイン後の画面で生徒照合を行います。
               </p>
 
-              {/* ローカル開発環境用テストログインボタン（localhost / 127.0.0.1 のみ表示） */}
-              {(typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) && (
+              {/* 開発環境（localhost / 127.0.0.1）限定 テスト用保護者ログインボタン */}
+              {(typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.includes('192.168.'))) && (
                 <button
                   type="button"
+                  id="test-yagijinai-login-btn"
                   onClick={async () => {
+                    setIsLoading(true)
                     await loginAsParent('yagijinai@gmail.com')
                     navigate('/parent/dashboard')
                   }}
-                  className="w-full py-3 bg-amber-500/15 hover:bg-amber-500/25 active:scale-95 text-amber-300 font-bold rounded-2xl text-xs transition-all border border-amber-500/30 flex items-center justify-center gap-2 shadow-lg"
+                  className="w-full py-3.5 bg-gradient-to-r from-amber-500/20 via-orange-500/20 to-amber-500/20 hover:from-amber-500/30 hover:to-orange-500/30 active:scale-95 text-amber-300 font-black rounded-2xl text-xs sm:text-sm transition-all border border-amber-500/40 flex items-center justify-center gap-2 shadow-lg ring-1 ring-amber-400/30"
                 >
-                  <Smartphone className="h-4 w-4 text-amber-400" />
-                  <span>[ローカル検証用] yagijinai@gmail.com で画面確認</span>
-                  <ArrowRight className="h-3.5 w-3.5 text-amber-400" />
+                  <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+                  <span>【テスト用：yagijinai@gmail.com で即座に保護者画面を開く】</span>
+                  <ArrowRight className="h-4 w-4 text-amber-400 shrink-0" />
                 </button>
               )}
             </div>
