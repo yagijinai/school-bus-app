@@ -5,7 +5,7 @@ import { Login } from './pages/Login'
 import { Dashboard as ParentDashboard } from './pages/parent/Dashboard'
 import { DriverDashboard } from './pages/driver/Dashboard'
 import { AdminDashboard } from './pages/admin/Dashboard'
-
+import { Bus } from 'lucide-react'
 
 // 保護者用ダイレクトダッシュボードコンポーネント（直接描画）
 const DirectParentContainer: React.FC = () => {
@@ -54,7 +54,28 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 }
 
 const AppRoutes: React.FC = () => {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+
+  // 画面描画最優先ローディングロック（OAuthリダイレクトおよび初期認証確認が100%完了するまで全ルートを完全ロック）
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-white font-sans p-4 select-none">
+        <div className="relative">
+          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-amber-500 via-indigo-500 to-purple-600 p-0.5 animate-spin">
+            <div className="w-full h-full bg-slate-950 rounded-3xl flex items-center justify-center">
+              <Bus className="h-7 w-7 text-amber-400 animate-pulse" />
+            </div>
+          </div>
+        </div>
+        <p className="mt-5 text-base font-black text-slate-100 tracking-wide">
+          認証・運行データ同期中...
+        </p>
+        <p className="mt-1.5 text-xs text-slate-400">
+          Googleアカウント照合およびスプレッドシート連携を実行しています
+        </p>
+      </div>
+    )
+  }
 
   return (
     <Routes>

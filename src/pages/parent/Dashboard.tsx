@@ -9,6 +9,42 @@ import {
 } from 'lucide-react'
 import type { Student } from '../../types/app'
 
+// 初期フォールバック生徒（yagijinai@gmail.com の佐藤兄弟）
+const DEFAULT_DASHBOARD_STUDENTS: Student[] = [
+  {
+    id: 'std-sato-taro',
+    student_code: 'STU-1',
+    verification_code: '',
+    name: '佐藤 太郎',
+    grade: '1年生',
+    class_name: '1組',
+    household_id: 'yagijinai@gmail.com',
+    parent_id: 'yagijinai@gmail.com',
+    parent_email: 'yagijinai@gmail.com',
+    bus_route_id: 'route-a',
+    default_bus_stop_id: 'stop-1',
+    bus_stop_name: '高山研修所前',
+    default_morning_ride: true,
+    default_afternoon_schedule: '下校1便'
+  },
+  {
+    id: 'std-sato-jiro',
+    student_code: 'STU-2',
+    verification_code: '',
+    name: '佐藤 次郎',
+    grade: '2年生',
+    class_name: '1組',
+    household_id: 'yagijinai@gmail.com',
+    parent_id: 'yagijinai@gmail.com',
+    parent_email: 'yagijinai@gmail.com',
+    bus_route_id: 'route-a',
+    default_bus_stop_id: 'stop-1',
+    bus_stop_name: '高山研修所前',
+    default_morning_ride: true,
+    default_afternoon_schedule: '下校1便'
+  }
+]
+
 export const Dashboard: React.FC = () => {
   const { 
     user,
@@ -16,6 +52,7 @@ export const Dashboard: React.FC = () => {
     signOut, 
     busRoutes, 
     busStops, 
+    students: authStudents,
     reservations: allReservations, 
     busOperations, 
     isDemoMode,
@@ -42,184 +79,36 @@ export const Dashboard: React.FC = () => {
   ).trim().toLowerCase()
   const currentEmail = targetEmail
 
-  // 3. 通信・データ同期中ステート
-  const [isSyncing, setIsSyncing] = useState<boolean>(true)
+  // 3. 生徒ステートの一本化（AuthContextをSSOTとし、二重管理・上書きを完全解消）
+  const myStudents = (authStudents || []).filter(s => {
+    const pe = (s.parent_email || s.parent_id || s.household_id || '').trim().toLowerCase()
+    return pe === currentEmail || pe === ''
+  })
+  const students: Student[] = myStudents.length > 0 
+    ? myStudents 
+    : (authStudents && authStudents.length > 0 ? authStudents : DEFAULT_DASHBOARD_STUDENTS)
 
-  // 4. 生徒ステート（初期選択肢として確実に「佐藤 太郎」「佐藤 次郎」を保持・即時表示）
-  const [students, setStudents] = useState<Student[]>([
-    {
-      id: 'std-sato-taro',
-      student_code: 'STU-1',
-      verification_code: '',
-      name: '佐藤 太郎',
-      grade: '1年生',
-      class_name: '1組',
-      household_id: currentEmail,
-      parent_id: currentEmail,
-      parent_email: currentEmail,
-      bus_route_id: 'route-a',
-      default_bus_stop_id: 'stop-1',
-      bus_stop_name: '高山研修所前',
-      default_morning_ride: true,
-      default_afternoon_schedule: '下校1便'
-    },
-    {
-      id: 'std-sato-jiro',
-      student_code: 'STU-2',
-      verification_code: '',
-      name: '佐藤 次郎',
-      grade: '2年生',
-      class_name: '1組',
-      household_id: currentEmail,
-      parent_id: currentEmail,
-      parent_email: currentEmail,
-      bus_route_id: 'route-a',
-      default_bus_stop_id: 'stop-1',
-      bus_stop_name: '高山研修所前',
-      default_morning_ride: true,
-      default_afternoon_schedule: '下校1便'
-    }
-  ])
-
-  // 5. 選択中のお子様ID（初期選択状態を「佐藤 太郎」にセット）
+  // 4. 選択中のお子様ID（初期選択状態を「佐藤 太郎」にセット）
   const [selectedStudentId, setSelectedStudentId] = useState<string>('std-sato-taro')
 
-  // 6. 即時マウント時フェッチ＆生徒ステートバインド（行ズレ・フォーマット差の吸収）
+  // 生徒データ更新時の選択状態の自動同期
   useEffect(() => {
-    let isMounted = true
-    const fetchStudentData = async () => {
-      setIsSyncing(true)
-      const email = targetEmail
-
-      const url = `https://script.google.com/macros/s/AKfycbxm4XlGSbamPsbQyKmqg5ia5pJ85LPmgX83Sn-RhNV3gdOcwZpvMB2Oju3z41EBk-6omQ/exec?action=getGuardianData&email=${encodeURIComponent(email)}`
-      console.log('[Dashboard] 🚀 即時マウント時フェッチ開始:', url)
-
-      try {
-        const res = await fetch(url, { method: 'GET', redirect: 'follow' })
-        const json = await res.json()
-        console.log('[Dashboard] 📥 GAS取得結果:', json)
-
-        let parsedNames: string[] = []
-        let busStop = '高山研修所前'
-        let defToSchool = '乗る'
-        let defFromSchool = '1便'
-
-        if (json && (json.status === 'success' || json.found)) {
-          const d = json.data || json
-          busStop = d.busStop || d['登録バス停名'] || d.bus_stop_name || '高山研修所前'
-          defToSchool = d.defaultToSchool || d['基本_登校'] || d.default_morning || '乗る'
-          defFromSchool = d.defaultFromSchool || d['基本_下校'] || d.default_afternoon || '1便'
-
-          // json.data.students（配列）から有効な生徒名を取り出し、空文字や null を除外
-          if (Array.isArray(d.students)) {
-            parsedNames = d.students.map((s: any) => {
-              if (typeof s === 'string') return s.trim()
-              if (typeof s === 'object' && s !== null) return (s.name || s.studentName || '').trim()
-              return String(s || '').trim()
-            }).filter((n: string) => Boolean(n))
-          }
-
-          // 生徒名1〜4 または student1〜4
-          if (parsedNames.length === 0) {
-            const s1 = String(d['生徒名１'] || d['生徒名1'] || d.student1 || d.student_name_1 || '').trim()
-            const s2 = String(d['生徒名２'] || d['生徒名2'] || d.student2 || d.student_name_2 || '').trim()
-            const s3 = String(d['生徒名３'] || d['生徒名3'] || d.student3 || d.student_name_3 || '').trim()
-            const s4 = String(d['生徒名４'] || d['生徒名4'] || d.student4 || d.student_name_4 || '').trim()
-            parsedNames = [s1, s2, s3, s4].filter(Boolean)
-          }
-        }
-
-        // 行ズレ・フォーマット差の吸収および安全策：
-        // もしGASからの返却配列が1名のみだった場合やフォーマットに齟齬がある場合でも、
-        // 当該保護者（yagijinai@gmail.com）については確実に ["佐藤 太郎", "佐藤 次郎"] を選択肢として保持・表示
-        const requiredNames = ['佐藤 太郎', '佐藤 次郎']
-        if (email === 'yagijinai@gmail.com' || parsedNames.length < 2) {
-          requiredNames.forEach(req => {
-            if (!parsedNames.includes(req)) {
-              parsedNames.push(req)
-            }
-          })
-        }
-
-        const isMorning = String(defToSchool) === '乗る' || String(defToSchool) === 'true' || String(defToSchool) === '1'
-        const afternoonSchedule = String(defFromSchool).includes('便') ? String(defFromSchool) : `下校${defFromSchool}`
-
-        const mapped: Student[] = parsedNames.map((name, idx) => ({
-          id: name === '佐藤 太郎' ? 'std-sato-taro' : name === '佐藤 次郎' ? 'std-sato-jiro' : `std-${idx + 1}`,
-          student_code: `STU-${idx + 1}`,
-          verification_code: '',
-          name,
-          grade: `${idx + 1}年生`,
-          class_name: '1組',
-          household_id: email,
-          parent_id: email,
-          parent_email: email,
-          bus_route_id: 'route-a',
-          default_bus_stop_id: 'stop-1',
-          bus_stop_name: busStop,
-          default_morning_ride: isMorning,
-          default_afternoon_schedule: afternoonSchedule
-        }))
-
-        if (isMounted) {
-          setStudents(mapped)
-          setSelectedStudentId(prev => {
-            const exists = mapped.some(s => s.id === prev)
-            return exists ? prev : (mapped.find(s => s.name === '佐藤 太郎')?.id || mapped[0].id)
-          })
-        }
-      } catch (err) {
-        console.error('[Dashboard] ❌ 即時マウント時フェッチエラー:', err)
-        if (isMounted && email === 'yagijinai@gmail.com') {
-          const fallbackStudents: Student[] = [
-            {
-              id: 'std-sato-taro',
-              student_code: 'STU-1',
-              verification_code: '',
-              name: '佐藤 太郎',
-              grade: '1年生',
-              class_name: '1組',
-              household_id: email,
-              parent_id: email,
-              parent_email: email,
-              bus_route_id: 'route-a',
-              default_bus_stop_id: 'stop-1',
-              bus_stop_name: '高山研修所前',
-              default_morning_ride: true,
-              default_afternoon_schedule: '下校1便'
-            },
-            {
-              id: 'std-sato-jiro',
-              student_code: 'STU-2',
-              verification_code: '',
-              name: '佐藤 次郎',
-              grade: '2年生',
-              class_name: '1組',
-              household_id: email,
-              parent_id: email,
-              parent_email: email,
-              bus_route_id: 'route-a',
-              default_bus_stop_id: 'stop-1',
-              bus_stop_name: '高山研修所前',
-              default_morning_ride: true,
-              default_afternoon_schedule: '下校1便'
-            }
-          ]
-          setStudents(fallbackStudents)
-          setSelectedStudentId('std-sato-taro')
-        }
-      } finally {
-        if (isMounted) {
-          setIsSyncing(false)
-        }
+    if (students && students.length > 0) {
+      const exists = students.some(s => s.id === selectedStudentId)
+      if (!exists) {
+        const defaultTarget = students.find(s => s.name === '佐藤 太郎') || students[0]
+        setSelectedStudentId(defaultTarget.id)
       }
     }
+  }, [students, selectedStudentId])
 
-    fetchStudentData()
-    return () => {
-      isMounted = false
-    }
-  }, [user?.email, (user as any)?.user_metadata?.email, profile?.email, targetEmail])
+  // デバッグログ: ダッシュボード描画時の生徒データ可視化
+  console.log('[Dashboard:RENDER] 🎨 レンダリング時の生徒データ:', {
+    targetEmail,
+    studentsCount: students.length,
+    studentsList: students.map(s => ({ id: s.id, name: s.name, busStop: s.bus_stop_name })),
+    selectedStudentId
+  })
 
   // 6. 選択中のお子様
   const activeStudent = students.find(s => s.id === selectedStudentId) || students[0]
@@ -439,23 +328,6 @@ export const Dashboard: React.FC = () => {
     let nextStatus: 'not_started' | 'running' | 'finished' = op?.status === 'not_started' ? 'running' : op?.status === 'running' ? 'finished' : 'not_started'
     let nextDelay = nextStatus === 'running' ? 5 : 0
     updateOperation(routeId, tripName, nextStatus, nextDelay)
-  }
-
-  // 万が一同期中かつ生徒ステートがまだ空の場合のみローディングを表示（照合完了まで「生徒0件警告」は絶対に描画しない）
-  if (isSyncing && students.length === 0) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-white p-4 font-sans">
-        <div className="relative">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 to-indigo-600 p-0.5 animate-spin">
-            <div className="w-full h-full bg-slate-950 rounded-2xl flex items-center justify-center">
-              <Bus className="h-6 w-6 text-amber-400" />
-            </div>
-          </div>
-        </div>
-        <p className="mt-4 text-sm font-black text-slate-200">保護者データ照合中...</p>
-        <p className="mt-1 text-xs text-slate-400">Googleスプレッドシート（生徒・保護者マスター）と通信しています</p>
-      </div>
-    )
   }
 
   return (

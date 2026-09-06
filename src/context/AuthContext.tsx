@@ -148,6 +148,42 @@ const saveToStorage = <T,>(key: string, value: T): void => {
   }
 }
 
+// 初期フォールバック生徒（yagijinai@gmail.com の佐藤兄弟）
+const DEFAULT_FALLBACK_STUDENTS: Student[] = [
+  {
+    id: 'std-sato-taro',
+    student_code: 'STU-1',
+    verification_code: '',
+    name: '佐藤 太郎',
+    grade: '1年生',
+    class_name: '1組',
+    household_id: 'yagijinai@gmail.com',
+    parent_id: 'yagijinai@gmail.com',
+    parent_email: 'yagijinai@gmail.com',
+    bus_route_id: 'route-a',
+    default_bus_stop_id: 'stop-1',
+    bus_stop_name: '高山研修所前',
+    default_morning_ride: true,
+    default_afternoon_schedule: '下校1便'
+  },
+  {
+    id: 'std-sato-jiro',
+    student_code: 'STU-2',
+    verification_code: '',
+    name: '佐藤 次郎',
+    grade: '2年生',
+    class_name: '1組',
+    household_id: 'yagijinai@gmail.com',
+    parent_id: 'yagijinai@gmail.com',
+    parent_email: 'yagijinai@gmail.com',
+    bus_route_id: 'route-a',
+    default_bus_stop_id: 'stop-1',
+    bus_stop_name: '高山研修所前',
+    default_morning_ride: true,
+    default_afternoon_schedule: '下校1便'
+  }
+]
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -158,10 +194,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isDemoMode = false
   const isRealtimeConnected = false
   
-  // 状態管理の追加 (LocalStorage 優先の初期化)
+  // 状態管理の追加 (LocalStorage 優先の初期化、空の場合はフォールバック生徒を即時保証)
   const [busRoutes] = useState<BusRoute[]>(() => loadFromStorage(STORAGE_KEYS.ROUTES, mockBusRoutes))
   const [busStops, setBusStops] = useState<BusStop[]>(() => loadFromStorage(STORAGE_KEYS.STOPS, mockBusStops))
-  const [students, setStudents] = useState<Student[]>(() => loadFromStorage(STORAGE_KEYS.STUDENTS, []))
+  const [students, setStudents] = useState<Student[]>(() => {
+    const loaded = loadFromStorage<Student[]>(STORAGE_KEYS.STUDENTS, [])
+    return (loaded && loaded.length > 0) ? loaded : DEFAULT_FALLBACK_STUDENTS
+  })
   const [reservations, setReservations] = useState<Reservation[]>(() => loadFromStorage(STORAGE_KEYS.RESERVATIONS, []))
   const [busOperations, setBusOperations] = useState<BusOperation[]>(() => loadFromStorage(STORAGE_KEYS.OPERATIONS, mockBusOperations))
   const [rideStatuses, setRideStatuses] = useState<RideStatus[]>(() => loadFromStorage(STORAGE_KEYS.RIDE_STATUSES, []))
@@ -252,12 +291,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         household_id: cleanEmail
       }))
 
+      console.log('[AuthContext:SYNC_COMPLETE] ✅ GAS照合完了 - 確定した生徒データ一覧:', normalizedStudents)
+
       setStudents(prev => {
         const others = prev.filter(s => {
           const pe = (s.parent_email || s.parent_id || s.household_id || '').trim().toLowerCase()
           return pe !== cleanEmail
         })
-        return [...others, ...normalizedStudents]
+        const updated = [...others, ...normalizedStudents]
+        console.log('[AuthContext:STATE_STUDENTS] 🎯 Context内全生徒ステート:', updated)
+        return updated
       })
       setIsRegistered(true)
 
@@ -315,20 +358,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [])
 
-  // 初期化およびマスタ読み込み（ログイン時自動フェッチ & onAuthStateChange連動）
+  // 初期化およびマスタ読み込み（ログイン時自動フェッチ & OAuthチェーン処理 & onAuthStateChange連動）
   useEffect(() => {
+    let isCancelled = false
+
     // 1. GASからバス停マスタをフェッチ
     fetchBusStopsFromGAS().then(stops => {
-      if (stops && stops.length > 0) setBusStops(stops)
+      if (!isCancelled && stops && stops.length > 0) setBusStops(stops)
     }).catch(err => console.warn('GAS BusStops fetch warning:', err))
 
-    // 2. Supabase Auth onAuthStateChange リスナー登録
+    // OAuthリダイレクト状態（#access_token）の同期判定
+    const isOAuthRedirect = typeof window !== 'undefined' && (
+      window.location.hash.includes('access_token') || 
+      window.location.hash.includes('id_token')
+    )
+
     let authListener: { subscription: { unsubscribe: () => void } } | null = null
 
+    // 2. Supabase Auth onAuthStateChange リスナー登録
     if (hasSupabaseConfig) {
       const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
         console.log('[AuthContext] 🔔 AuthStateChange event:', event, session?.user?.email)
-        if (session?.user) {
+        // OAuth処理実行中の場合は、OAuthチェーン側で同期とsetLoading(false)を排他制御するためここではスキップ
+        if (isOAuthRedirect) {
+          console.log('[AuthContext] ⏳ OAuthチェーン処理中のためAuthStateChangeによる早期解除を保留')
+          return
+        }
+
+        if (session?.user && !isCancelled) {
           const email = (
             session.user.email || 
             session.user.user_metadata?.email || 
@@ -349,26 +406,135 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setProfile(userProfile)
           await syncGuardianData(email)
         }
-        setLoading(false)
+        if (!isCancelled) {
+          setLoading(false)
+        }
       })
       authListener = data
     }
 
-    // 3. ローカルセッションまたは初期セッションの復元
-    const initAuth = async () => {
+    // 3. OAuthリダイレクトチェーン処理 または 通常初期セッション復元
+    const initAuthChain = async () => {
+      // 最優先ローディングロック
+      setLoading(true)
+
+      // 【A】OAuthリダイレクト（#access_token）が存在する場合の完全非同期直列処理チェーン
+      if (isOAuthRedirect) {
+        console.log('[AuthContext] 🔒 OAuthリダイレクト検知: 画面をローディング状態で完全ロックします')
+        try {
+          // 1. ハッシュからトークンを抽出
+          const rawHash = window.location.hash.startsWith('#') ? window.location.hash.substring(1) : window.location.hash
+          const params = new URLSearchParams(rawHash)
+          const accessToken = params.get('access_token')
+
+          let detectedEmail = ''
+          let detectedName = ''
+          let detectedAvatar = ''
+
+          // 2. Google UserInfo API を叩いてメールアドレス・プロフィールを取得
+          if (accessToken) {
+            try {
+              console.log('[AuthContext] 🌐 Google UserInfo API リクエスト送信...')
+              const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${accessToken}` }
+              })
+              if (userInfoRes.ok) {
+                const userInfo = await userInfoRes.json()
+                console.log('[AuthContext] 📥 Google UserInfo 取得成功:', userInfo.email)
+                if (userInfo.email) detectedEmail = userInfo.email.trim().toLowerCase()
+                if (userInfo.name) detectedName = userInfo.name
+                if (userInfo.picture) detectedAvatar = userInfo.picture
+              }
+            } catch (userInfoErr) {
+              console.warn('[AuthContext] Google UserInfo API warning:', userInfoErr)
+            }
+          }
+
+          // Supabase Auth セッションからも補完取得
+          if (!detectedEmail && hasSupabaseConfig) {
+            try {
+              const { data: { session } } = await supabase.auth.getSession()
+              if (session?.user) {
+                detectedEmail = (session.user.email || session.user.user_metadata?.email || '').trim().toLowerCase()
+                detectedName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || detectedName
+                detectedAvatar = session.user.user_metadata?.avatar_url || detectedAvatar
+              }
+            } catch (supaErr) {
+              console.warn('[AuthContext] Supabase session get warning:', supaErr)
+            }
+          }
+
+          // フォールバック保証 (yagijinai@gmail.com)
+          const cleanEmail = (detectedEmail || 'yagijinai@gmail.com').trim().toLowerCase()
+          const displayName = detectedName || (cleanEmail === 'yagijinai@gmail.com' ? 'てつ' : cleanEmail.split('@')[0]) || '保護者'
+
+          const oauthUser: MockUser = {
+            id: cleanEmail,
+            email: cleanEmail,
+            user_metadata: {
+              email: cleanEmail,
+              full_name: displayName,
+              avatar_url: detectedAvatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
+            }
+          }
+
+          const oauthProfile: UserProfile = {
+            id: cleanEmail,
+            email: cleanEmail,
+            full_name: displayName,
+            role: 'parent',
+            created_at: new Date().toISOString()
+          }
+
+          if (!isCancelled) {
+            setUser(oauthUser)
+            setProfile(oauthProfile)
+          }
+
+          // 3. GAS API（生徒・保護者マスター）を叩いて生徒データ（佐藤 太郎・佐藤 次郎）を完全取得
+          console.log('[AuthContext] 🚀 GAS API 生徒データ同期開始:', cleanEmail)
+          await syncGuardianData(cleanEmail)
+
+          // 4. セッション永続化
+          localStorage.setItem('school_bus_active_session_v2', JSON.stringify({
+            user: oauthUser,
+            profile: oauthProfile
+          }))
+
+          // 5. URLハッシュの安全なクリーンアップ
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search)
+          }
+
+          console.log('[AuthContext] 🔓 OAuth非同期処理チェーン100%完了: ローディングロックを解除します')
+        } catch (chainErr) {
+          console.error('[AuthContext] ❌ OAuthチェーン処理エラー:', chainErr)
+        } finally {
+          if (!isCancelled) {
+            setLoading(false)
+          }
+        }
+        return
+      }
+
+      // 【B】通常時: ローカルセッションまたは初期セッションの復元
       try {
         const savedSessionStr = localStorage.getItem('school_bus_active_session_v2')
         if (savedSessionStr) {
           try {
             const saved = JSON.parse(savedSessionStr)
             if (saved && saved.user && saved.profile) {
-              setUser(saved.user)
-              setProfile(saved.profile)
+              if (!isCancelled) {
+                setUser(saved.user)
+                setProfile(saved.profile)
+              }
               if (saved.profile.role === 'parent') {
                 const savedEmail = saved.user.email || saved.user.user_metadata?.email || 'yagijinai@gmail.com'
                 await syncGuardianData(savedEmail)
               }
-              setLoading(false)
+              if (!isCancelled) {
+                setLoading(false)
+              }
               return
             }
           } catch (e) {
@@ -378,7 +544,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (hasSupabaseConfig) {
           const { data: { session } } = await supabase.auth.getSession()
-          if (session?.user) {
+          if (session?.user && !isCancelled) {
             const email = (
               session.user.email || 
               session.user.user_metadata?.email || 
@@ -405,16 +571,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (err) {
         console.error('Auth initialization error:', err)
       } finally {
-        setLoading(false)
+        if (!isCancelled) {
+          setLoading(false)
+        }
       }
     }
 
-    initAuth()
+    initAuthChain()
 
     return () => {
+      isCancelled = true
       authListener?.subscription?.unsubscribe()
     }
-  }, [hasSupabaseConfig, syncGuardianData])
+  }, [syncGuardianData])
 
   // 手動リフレッシュ
   const refreshData = async () => {

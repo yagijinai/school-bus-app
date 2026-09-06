@@ -125,32 +125,39 @@ export async function getGuardianData(email: string): Promise<{
   students?: Student[]
   error?: string
 }> {
-  const cleanEmail = email.trim().toLowerCase()
-  if (!cleanEmail) {
-    return { success: false, found: false, error: 'メールアドレスが指定されていません。' }
-  }
+    const cleanEmail = email.trim().toLowerCase()
+    if (!cleanEmail) {
+      console.warn('[GAS getGuardianData:ERROR] ❌ メールアドレスが指定されていません。')
+      return { success: false, found: false, error: 'メールアドレスが指定されていません。' }
+    }
 
-  console.log('[GAS getGuardianData] 🔍 Fetching guardian data via GET for email:', cleanEmail)
-
-  try {
-    // 1. GET リクエスト
-    let result = await sendGASGetRequest<any>({
-      action: 'getGuardianData',
+    console.log('[GAS getGuardianData:REQUEST] 🚀 リクエスト送信情報:', {
+      requestUrl: `${GAS_API_URL}?action=getGuardianData&email=${encodeURIComponent(cleanEmail)}`,
       email: cleanEmail
     })
 
-    // GET が失敗した場合は POST も試行
-    if (!result.success || !result.found) {
-      console.log('[GAS getGuardianData] 🔄 Attempting POST fallback for:', cleanEmail)
-      const postResult = await sendGASRequest<any>({
+    try {
+      // 1. GET リクエスト
+      let result = await sendGASGetRequest<any>({
         action: 'getGuardianData',
-        email: cleanEmail,
-        parentEmail: cleanEmail
+        email: cleanEmail
       })
-      if (postResult.success && postResult.found) {
-        result = postResult
+
+      console.log('[GAS getGuardianData:RAW_RESPONSE:GET] 📥 生データ (Raw JSON):', JSON.stringify(result.raw || result))
+
+      // GET が失敗した場合は POST も試行
+      if (!result.success || !result.found) {
+        console.log('[GAS getGuardianData:FALLBACK:POST] 🔄 POSTフォールバック試行中:', cleanEmail)
+        const postResult = await sendGASRequest<any>({
+          action: 'getGuardianData',
+          email: cleanEmail,
+          parentEmail: cleanEmail
+        })
+        console.log('[GAS getGuardianData:RAW_RESPONSE:POST] 📥 生データ (Raw JSON):', JSON.stringify(postResult.raw || postResult))
+        if (postResult.success && postResult.found) {
+          result = postResult
+        }
       }
-    }
 
     console.log('[GAS getGuardianData] 📦 Received payload:', result)
 
@@ -262,7 +269,7 @@ export async function getGuardianData(email: string): Promise<{
       default_afternoon_schedule: String(defaultAfternoon).includes('便') ? String(defaultAfternoon) : `下校${defaultAfternoon}`
     }))
 
-    console.log('[GAS getGuardianData] 🎉 Successfully bound students:', students)
+    console.log('[GAS getGuardianData:PARSED_STUDENTS] 🎉 生徒データマッピング完了:', students)
 
     return {
       success: true,
