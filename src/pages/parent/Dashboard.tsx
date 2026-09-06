@@ -5,7 +5,8 @@ import { ParentOnboardingModal } from '../../components/parent/ParentOnboardingM
 import { 
   Bus, Calendar as CalendarIcon, Clock, CheckCircle2, AlertCircle, 
   LogOut, ChevronLeft, ChevronRight, Sparkles, MapPin, 
-  Users, MessageSquare, Check, X, Info, CalendarDays, HelpCircle
+  Users, MessageSquare, Check, X, Info, CalendarDays, HelpCircle,
+  Loader2, Save
 } from 'lucide-react'
 import type { Student } from '../../types/app'
 
@@ -101,6 +102,11 @@ export const Dashboard: React.FC = () => {
       }
     }
   }, [students, selectedStudentId])
+
+  // 週間予約保存状態管理
+  const [savingDates, setSavingDates] = useState<Record<string, boolean>>({})
+  const [isBatchSaving, setIsBatchSaving] = useState(false)
+  const [lastSavedDate, setLastSavedDate] = useState<string | null>(null)
 
   // デバッグログ: ダッシュボード描画時の生徒データ可視化（最重要確認ログ）
   console.log('[Dashboard] Current students in view:', authStudents)
@@ -218,11 +224,17 @@ export const Dashboard: React.FC = () => {
     const currentNote = currentRes ? currentRes.note : null
 
     const newMorning = !currentMorning
-    const success = await saveReservation(activeStudent.id, dateStr, newMorning, currentAfternoon, currentNote)
-    if (success) {
-      showToast(`${dateStr} の登校便を「${newMorning ? '乗車' : '乗車しない'}」に変更しました。`, 'success')
-    } else {
-      showToast('保存に失敗しました。再度お試しください。', 'error')
+    setSavingDates(prev => ({ ...prev, [dateStr]: true }))
+    try {
+      const success = await saveReservation(activeStudent.id, dateStr, newMorning, currentAfternoon, currentNote)
+      if (success) {
+        showToast(`${dateStr} の登校便を「${newMorning ? '乗車' : '乗車しない'}」に変更しました。`, 'success')
+        setLastSavedDate(dateStr)
+      } else {
+        showToast('保存に失敗しました。再度お試しください。', 'error')
+      }
+    } finally {
+      setSavingDates(prev => ({ ...prev, [dateStr]: false }))
     }
   }
 
@@ -238,11 +250,17 @@ export const Dashboard: React.FC = () => {
     const currentMorning = currentRes ? currentRes.morning_status : (activeStudent.default_morning_ride ?? true)
     const currentNote = currentRes ? currentRes.note : null
 
-    const success = await saveReservation(activeStudent.id, dateStr, currentMorning, newSchedule, currentNote)
-    if (success) {
-      showToast(`${dateStr} の下校便を「${newSchedule || '乗車しない'}」に変更しました。`, 'success')
-    } else {
-      showToast('保存に失敗しました。再度お試しください。', 'error')
+    setSavingDates(prev => ({ ...prev, [dateStr]: true }))
+    try {
+      const success = await saveReservation(activeStudent.id, dateStr, currentMorning, newSchedule, currentNote)
+      if (success) {
+        showToast(`${dateStr} の下校便を「${newSchedule || '乗車しない'}」に変更しました。`, 'success')
+        setLastSavedDate(dateStr)
+      } else {
+        showToast('保存に失敗しました。再度お試しください。', 'error')
+      }
+    } finally {
+      setSavingDates(prev => ({ ...prev, [dateStr]: false }))
     }
   }
 
@@ -288,6 +306,35 @@ export const Dashboard: React.FC = () => {
       showToast('今週の週間予約を一括更新しました。', 'success')
     } else {
       showToast('一括更新に失敗しました。', 'error')
+    }
+  }
+
+  // 今週の週間予約を確定・一括保存（GASへ明示送信）
+  const handleSaveAllWeekReservations = async () => {
+    if (!activeStudent) return
+    setIsBatchSaving(true)
+    try {
+      const items = currentWeekDays.map(dateStr => {
+        const currentRes = reservations.find(r => (r.student_id === activeStudent.id || r.student_name === activeStudent.name) && r.date === dateStr)
+        const morningStatus = currentRes ? currentRes.morning_status : (activeStudent.default_morning_ride ?? true)
+        const afternoonSchedule = currentRes ? currentRes.afternoon_schedule : (activeStudent.default_afternoon_schedule || '下校1便')
+        const note = currentRes?.note || null
+        return {
+          date: dateStr,
+          morningStatus,
+          afternoonSchedule,
+          note
+        }
+      })
+
+      const success = await saveWeeklyReservations(activeStudent.id, items)
+      if (success) {
+        showToast(`今週（${mondayDate.getMonth() + 1}/${mondayDate.getDate()}〜${fridayDate.getMonth() + 1}/${fridayDate.getDate()}）の予約データをスプレッドシート（GAS）へ確定・保存しました。`, 'success')
+      } else {
+        showToast('一括保存に失敗しました。再度お試しください。', 'error')
+      }
+    } finally {
+      setIsBatchSaving(false)
     }
   }
 
@@ -519,22 +566,43 @@ export const Dashboard: React.FC = () => {
                   </button>
 
                   <div className="ml-2">
-                    <h2 className="text-sm sm:text-base font-black text-white">
-                      {mondayDate.getFullYear()}年 {mondayDate.getMonth() + 1}月{mondayDate.getDate()}日(月) 〜 {fridayDate.getMonth() + 1}月{fridayDate.getDate()}日(金)
-                    </h2>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm sm:text-base font-black text-white">
+                        {mondayDate.getFullYear()}年 {mondayDate.getMonth() + 1}月{mondayDate.getDate()}日(月) 〜 {fridayDate.getMonth() + 1}月{fridayDate.getDate()}日(金)
+                      </h2>
+                      <span className="hidden md:inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        自動保存有効
+                      </span>
+                    </div>
                     <p className="text-[10px] sm:text-xs text-indigo-300">
                       {activeStudent?.name} さんの週間運行スケジュール
                     </p>
                   </div>
                 </div>
 
-                <button
-                  onClick={handleApplyWeekDefaultPattern}
-                  className="px-4 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white text-xs font-black rounded-xl shadow-md shadow-indigo-500/20 transition-all flex items-center justify-center gap-1.5 active:scale-95 self-stretch sm:self-auto"
-                >
-                  <Sparkles className="h-4 w-4 text-amber-300" />
-                  今週の基本パターンを一括適用
-                </button>
+                <div className="flex items-center gap-2 self-stretch sm:self-auto">
+                  <button
+                    onClick={handleApplyWeekDefaultPattern}
+                    className="flex-1 sm:flex-initial px-3.5 py-2.5 bg-slate-950 hover:bg-slate-850 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                  >
+                    <Sparkles className="h-4 w-4 text-amber-300" />
+                    <span>基本パターン適用</span>
+                  </button>
+
+                  <button
+                    onClick={handleSaveAllWeekReservations}
+                    disabled={isBatchSaving}
+                    className="flex-1 sm:flex-initial px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+                  >
+                    {isBatchSaving ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-white" />
+                    ) : (
+                      <Save className="h-4 w-4 text-white" />
+                    )}
+                    <span>{isBatchSaving ? 'GAS保存中...' : '変更を確定・保存'}</span>
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
@@ -590,11 +658,25 @@ export const Dashboard: React.FC = () => {
                           </span>
                         </div>
 
-                        {isPast && (
-                          <span className="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
-                            変更締切
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {savingDates[dateStr] && (
+                            <span className="flex items-center gap-1 text-[9px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-1.5 py-0.5 rounded-full font-bold animate-pulse">
+                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                              保存中
+                            </span>
+                          )}
+                          {!savingDates[dateStr] && lastSavedDate === dateStr && (
+                            <span className="flex items-center gap-1 text-[9px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 rounded-full font-bold animate-in fade-in">
+                              <Check className="h-2.5 w-2.5" />
+                              保存済
+                            </span>
+                          )}
+                          {isPast && (
+                            <span className="text-[9px] text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                              変更締切
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {isSuspended ? (
@@ -666,11 +748,35 @@ export const Dashboard: React.FC = () => {
                 })}
               </div>
 
-              <div className="p-4 bg-slate-900/60 border border-slate-855 rounded-2xl flex items-start gap-3 text-xs text-slate-400">
-                <Info className="h-4 w-4 text-indigo-400 shrink-0 mt-0.5" />
-                <p className="leading-relaxed">
-                  ※ 変更の締切は<strong>運行当日の朝7:00まで</strong>です。
-                </p>
+              {/* 画面下部の一括保存＆安心フッターバー */}
+              <div className="p-4 bg-slate-900/90 border border-slate-800 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-indigo-500/20 text-indigo-300 shrink-0">
+                    <Info className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white">
+                      変更内容は自動的にGAS（スプレッドシート）へ保存されます
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      変更の締切は<strong>運行当日の朝7:00まで</strong>です。まとめて送信する場合は右側のボタンをご利用ください。
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveAllWeekReservations}
+                  disabled={isBatchSaving}
+                  className="w-full sm:w-auto px-5 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-2xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 shrink-0"
+                >
+                  {isBatchSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-white" />
+                  ) : (
+                    <Save className="h-4 w-4 text-white" />
+                  )}
+                  <span>{isBatchSaving ? 'GASへ保存中...' : '今週の予約内容を確定・保存する'}</span>
+                </button>
               </div>
             </div>
           )}

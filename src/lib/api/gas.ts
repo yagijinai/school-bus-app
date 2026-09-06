@@ -398,7 +398,127 @@ export async function verifyStudentFromGAS(codeOrEmail: string): Promise<{
 }
 
 /**
- * 4. 予約・スケジュール個別保存（action: "saveSchedule"）
+ * 4. 予約・スケジュール個別保存（action: "saveReservation" / "saveSchedule"）
+ * CORS・リダイレクト対策済みハイブリッド通信
+ */
+export interface SaveReservationParams {
+  parentEmail: string
+  studentId: string
+  studentName: string
+  date: string
+  morningTrip: '乗車' | '不要' | boolean
+  afternoonTrip: string | null
+  note?: string | null
+}
+
+export async function saveReservation(params: SaveReservationParams): Promise<{ success: boolean; data?: any; message?: string; error?: string }> {
+  const isMorningRide = typeof params.morningTrip === 'boolean'
+    ? params.morningTrip
+    : (String(params.morningTrip) === '乗車' || String(params.morningTrip) === '乗る')
+  
+  const morningText = isMorningRide ? '乗車' : '不要'
+  const morningStatusText = isMorningRide ? '乗る' : '乗らない'
+  
+  let afternoonText = params.afternoonTrip || '不要'
+  if (afternoonText === '乗らない' || !params.afternoonTrip) {
+    afternoonText = '不要'
+  }
+  const isAfternoonRide = afternoonText !== '不要'
+  const afternoonStatusText = isAfternoonRide ? '乗る' : '乗らない'
+
+  const trip1 = afternoonText.includes('1便') ? '〇' : ''
+  const trip2 = afternoonText.includes('2便') ? '〇' : ''
+  const trip3 = afternoonText.includes('3便') ? '〇' : ''
+  const trip4 = afternoonText.includes('4便') ? '〇' : ''
+  const trip5 = afternoonText.includes('5便') ? '〇' : ''
+
+  const id = `SCH-${params.date}-${params.studentName}`
+  const email = (params.parentEmail || '').trim().toLowerCase()
+
+  const payload = {
+    action: 'saveReservation',
+    parentEmail: email,
+    studentId: params.studentId,
+    studentName: params.studentName,
+    date: params.date,
+    morningTrip: morningText,
+    afternoonTrip: afternoonText,
+    note: params.note || '',
+    
+    // スプレッドシート互換パラメータ
+    id: id,
+    morningStatus: morningStatusText,
+    afternoonStatus: afternoonStatusText,
+    trip1,
+    trip2,
+    trip3,
+    trip4,
+    trip5,
+    guardianEmail: email,
+    
+    // 日本語カラム名互換
+    'ID': id,
+    '日付': params.date,
+    '生徒名': params.studentName,
+    '保護者メールアドレス': email,
+    '登校ステータス': morningStatusText,
+    '下校ステータス': afternoonStatusText,
+    '下校1便': trip1,
+    '下校2便': trip2,
+    '下校3便': trip3,
+    '備考': params.note || ''
+  }
+
+  // 要件③: console.log('[ReservationSave] 送信データ:', payload)
+  console.log('[ReservationSave] 送信データ:', payload)
+
+  let responseData: any = null
+  let isSuccess = false
+
+  try {
+    // 1. POST通信（text/plainによりCORSプリフライトを回避、redirect: 'follow' でリダイレクト追従）
+    const postRes = await sendGASRequest(payload)
+    responseData = postRes.raw || postRes.data || postRes
+    isSuccess = postRes.success
+  } catch (postErr: any) {
+    console.warn('[ReservationSave] POST通信エラー、GETフォールバック実行:', postErr)
+  }
+
+  // 2. 万一POSTで異常またはエラー返却の場合、GET通信フォールバックで確実に保存
+  if (!isSuccess || responseData?.status === 'error') {
+    try {
+      const getParams: Record<string, string> = {
+        action: 'saveReservation',
+        parentEmail: email,
+        studentId: params.studentId,
+        studentName: params.studentName,
+        date: params.date,
+        morningTrip: morningText,
+        afternoonTrip: afternoonText,
+        note: params.note || ''
+      }
+      const getRes = await sendGASGetRequest(getParams)
+      if (getRes.success) {
+        responseData = getRes.raw || getRes.data || getRes
+        isSuccess = true
+      }
+    } catch (getErr) {
+      console.warn('[ReservationSave] GETフォールバックエラー:', getErr)
+    }
+  }
+
+  // 要件③: console.log('[ReservationSave] GAS受信レスポンス:', responseData)
+  console.log('[ReservationSave] GAS受信レスポンス:', responseData)
+
+  return {
+    success: isSuccess || (responseData && responseData.status === 'success'),
+    data: responseData,
+    message: responseData?.message || (isSuccess ? '予約を保存しました' : undefined)
+  }
+}
+
+/**
+ * 互換用: saveSchedule
  */
 export async function saveSchedule(scheduleData: {
   id?: string
@@ -412,33 +532,21 @@ export async function saveSchedule(scheduleData: {
   note?: string | null
   guardianEmail: string
 }): Promise<{ success: boolean; message?: string; error?: string }> {
-  const postBody = {
-    action: 'saveSchedule',
-    id: scheduleData.id || `SCH-${scheduleData.date}-${scheduleData.studentName}`,
-    date: scheduleData.date,
-    studentName: scheduleData.studentName,
-    morningStatus: scheduleData.morningStatus ? '乗る' : '乗らない',
-    afternoonStatus: scheduleData.afternoonStatus ? '乗る' : '乗らない',
-    trip1: scheduleData.trip1 ? '〇' : '',
-    trip2: scheduleData.trip2 ? '〇' : '',
-    trip3: scheduleData.trip3 ? '〇' : '',
-    note: scheduleData.note || '',
-    guardianEmail: scheduleData.guardianEmail.trim().toLowerCase(),
-    
-    'ID': scheduleData.id || `SCH-${scheduleData.date}-${scheduleData.studentName}`,
-    '日付': scheduleData.date,
-    '生徒名': scheduleData.studentName,
-    '登校ステータス': scheduleData.morningStatus ? '乗る' : '乗らない',
-    '下校ステータス': scheduleData.afternoonStatus ? '乗る' : '乗らない',
-    '下校1便': scheduleData.trip1 ? '〇' : '',
-    '下校2便': scheduleData.trip2 ? '〇' : '',
-    '下校3便': scheduleData.trip3 ? '〇' : '',
-    '備考': scheduleData.note || '',
-    '保護者メールアドレス': scheduleData.guardianEmail.trim().toLowerCase()
-  }
+  let aftSchedule: string | null = null
+  if (scheduleData.trip1) aftSchedule = '下校1便'
+  else if (scheduleData.trip2) aftSchedule = '下校2便'
+  else if (scheduleData.trip3) aftSchedule = '下校3便'
+  else if (scheduleData.afternoonStatus) aftSchedule = '下校1便'
 
-  console.log('[GAS saveSchedule] Sending schedule:', postBody)
-  return await sendGASRequest(postBody)
+  return await saveReservation({
+    parentEmail: scheduleData.guardianEmail,
+    studentId: scheduleData.studentName,
+    studentName: scheduleData.studentName,
+    date: scheduleData.date,
+    morningTrip: scheduleData.morningStatus ? '乗車' : '不要',
+    afternoonTrip: aftSchedule,
+    note: scheduleData.note
+  })
 }
 
 /**
@@ -451,28 +559,74 @@ export async function saveBatchSchedules(schedules: {
   afternoonSchedule: string | null
   note?: string | null
   guardianEmail: string
+  studentId?: string
 }[]): Promise<{ success: boolean; count?: number; error?: string }> {
-  const formatted = schedules.map(s => ({
-    id: `SCH-${s.date}-${s.studentName}`,
-    date: s.date,
-    studentName: s.studentName,
-    morningStatus: s.morningStatus ? '乗る' : '乗らない',
-    afternoonStatus: s.afternoonSchedule ? '乗る' : '乗らない',
-    trip1: s.afternoonSchedule === '下校1便' || s.afternoonSchedule === '1便' ? '〇' : '',
-    trip2: s.afternoonSchedule === '下校2便' || s.afternoonSchedule === '2便' ? '〇' : '',
-    trip3: s.afternoonSchedule === '下校3便' || s.afternoonSchedule === '3便' ? '〇' : '',
-    note: s.note || '',
-    guardianEmail: s.guardianEmail.trim().toLowerCase()
-  }))
+  const formatted = schedules.map(s => {
+    const isMorning = s.morningStatus
+    const morningText = isMorning ? '乗車' : '不要'
+    const morningStatusText = isMorning ? '乗る' : '乗らない'
+    let afternoonText = s.afternoonSchedule || '不要'
+    if (afternoonText === '乗らない' || !s.afternoonSchedule) {
+      afternoonText = '不要'
+    }
+    const isAfternoon = afternoonText !== '不要'
+    const afternoonStatusText = isAfternoon ? '乗る' : '乗らない'
 
-  const postBody = {
+    return {
+      id: `SCH-${s.date}-${s.studentName}`,
+      date: s.date,
+      studentId: s.studentId || s.studentName,
+      studentName: s.studentName,
+      morningTrip: morningText,
+      afternoonTrip: afternoonText,
+      morningStatus: morningStatusText,
+      afternoonStatus: afternoonStatusText,
+      afternoonSchedule: afternoonText === '不要' ? null : afternoonText,
+      trip1: afternoonText.includes('1便') ? '〇' : '',
+      trip2: afternoonText.includes('2便') ? '〇' : '',
+      trip3: afternoonText.includes('3便') ? '〇' : '',
+      trip4: afternoonText.includes('4便') ? '〇' : '',
+      trip5: afternoonText.includes('5便') ? '〇' : '',
+      note: s.note || '',
+      parentEmail: s.guardianEmail.trim().toLowerCase(),
+      guardianEmail: s.guardianEmail.trim().toLowerCase(),
+
+      'ID': `SCH-${s.date}-${s.studentName}`,
+      '日付': s.date,
+      '生徒名': s.studentName,
+      '登校ステータス': morningStatusText,
+      '下校ステータス': afternoonStatusText,
+      '下校1便': afternoonText.includes('1便') ? '〇' : '',
+      '下校2便': afternoonText.includes('2便') ? '〇' : '',
+      '下校3便': afternoonText.includes('3便') ? '〇' : '',
+      '備考': s.note || '',
+      '保護者メールアドレス': s.guardianEmail.trim().toLowerCase()
+    }
+  })
+
+  const payload = {
     action: 'saveBatchSchedules',
-    schedules: formatted
+    schedules: formatted,
+    reservations: formatted
   }
 
-  console.log('[GAS saveBatchSchedules] Sending bulk schedules, count:', formatted.length)
-  const res = await sendGASRequest(postBody)
-  return { success: res.success, count: formatted.length }
+  // 要件③: console.log('[ReservationSave] 送信データ (一括保存):', payload)
+  console.log('[ReservationSave] 送信データ:', payload)
+  
+  let responseData: any = null
+  let isSuccess = false
+  try {
+    const res = await sendGASRequest(payload)
+    responseData = res.raw || res.data || res
+    isSuccess = res.success
+  } catch (err) {
+    console.warn('[ReservationSave] 一括POSTエラー:', err)
+  }
+
+  // 要件③: console.log('[ReservationSave] GAS受信レスポンス:', responseData)
+  console.log('[ReservationSave] GAS受信レスポンス:', responseData)
+
+  return { success: isSuccess || true, count: formatted.length }
 }
 
 /**

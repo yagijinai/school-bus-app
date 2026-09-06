@@ -20,8 +20,8 @@ import { getJapaneseHolidayName } from '../lib/holidays'
 import { 
   getGuardianData, 
   saveGuardianMaster, 
-  saveSchedule, 
   saveBatchSchedules,
+  saveReservation as saveReservationToGAS,
   fetchBusStopsFromGAS,
   fetchSchedulesFromGAS,
   fetchAllMasterFromGAS,
@@ -1019,17 +1019,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
 
     try {
-      await saveSchedule({
-        id: newRes.id,
-        date,
+      await saveReservationToGAS({
+        parentEmail: guardianEmail,
+        studentId,
         studentName,
-        morningStatus,
-        afternoonStatus: !!afternoonSchedule && afternoonSchedule !== '乗らない',
-        trip1,
-        trip2,
-        trip3,
-        note,
-        guardianEmail
+        date,
+        morningTrip: morningStatus ? '乗車' : '不要',
+        afternoonTrip: afternoonSchedule,
+        note
       })
     } catch (gasErr) {
       console.warn('saveReservation GAS error:', gasErr)
@@ -1070,6 +1067,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       await saveBatchSchedules(items.map(item => ({
         date: item.date,
+        studentId,
         studentName,
         morningStatus: item.morningStatus,
         afternoonSchedule: item.afternoonSchedule,
