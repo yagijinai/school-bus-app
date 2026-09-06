@@ -294,6 +294,22 @@ export const Login: React.FC = () => {
               <p className="text-[11px] text-center text-slate-500">
                 ※ 初めてご利用の方も、まず上記のGoogleログインを行ってください。ログイン後の画面で生徒照合を行います。
               </p>
+
+              {/* ローカル開発環境用テストログインボタン（localhost / 127.0.0.1 のみ表示） */}
+              {(typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await loginAsParent('yagijinai@gmail.com')
+                    navigate('/parent/dashboard')
+                  }}
+                  className="w-full py-3 bg-amber-500/15 hover:bg-amber-500/25 active:scale-95 text-amber-300 font-bold rounded-2xl text-xs transition-all border border-amber-500/30 flex items-center justify-center gap-2 shadow-lg"
+                >
+                  <Smartphone className="h-4 w-4 text-amber-400" />
+                  <span>[ローカル検証用] yagijinai@gmail.com で画面確認</span>
+                  <ArrowRight className="h-3.5 w-3.5 text-amber-400" />
+                </button>
+              )}
             </div>
           )}
 
