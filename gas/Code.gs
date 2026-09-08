@@ -1,18 +1,59 @@
 /**
  * スクールバス運行管理システム - Google Apps Script (GAS) バックエンド完全版
  * 
- * 【スプレッドシート「運行予定カレンダー」確定列定義】
- * A列: ID（行番号から1を引いた通し番号数値。例: データ先頭行[2行目]は 1、3行目は 2...）
- * B列: 日付（YYYY/MM/DD 形式。※スラッシュ区切り）
- * C列: 生徒名（選択された生徒氏名）
- * D列: 登校ステータス（「乗る」、または空文字 ""）
- * E列: 下校ステータス（乗らない場合のみ「乗らない」、下校便に乗る場合は空文字 ""）
- * F列: 下校1便（選択時の運行時刻 例: "15:30" 等、または空文字 ""）
- * G列: 下校2便（選択時の運行時刻 例: "16:30" 等、または空文字 ""）
- * H列: 下校3便（選択時の運行時刻 例: "17:30" 等、または空文字 ""）
- * I列: 備考（備考文字列、または空文字 ""）
- * J列: 更新日時（YYYY/MM/DD HH:mm:ss）
- * K列: 保護者メールアドレス
+ * 【スプレッドシート「生徒・保護者マスタ」全6シート完全定義】
+ * 
+ * 1. シート名: 「生徒・保護者マスター」
+ *    A列: 保護者メールアドレス
+ *    B列: 生徒名１
+ *    C列: 生徒名２
+ *    D列: 生徒名３
+ *    E列: 生徒名４
+ *    F列: 登録バス停名
+ *    G列: 備考
+ *    H列: 基本_登校（「乗る」、もしくは空白）
+ *    I列: 基本_下校（「1便」、「2便」、「乗らない」のいずれか）
+ * 
+ * 2. シート名: 「バス停マスタ」
+ *    A列: バス停名
+ *    B列: 住所
+ *    C列: 到着予定時刻（登校便）
+ *    D列: 停車順序
+ * 
+ * 3. シート名: 「運行予定カレンダー」
+ *    A列: ID（行番号から1を引いた通し番号数値）
+ *    B列: 日付（YYYY/MM/DD 形式）
+ *    C列: 生徒名
+ *    D列: 登校ステータス（「乗る」、もしくは空白）
+ *    E列: 下校ステータス（乗らない場合のみ「乗らない」、下校便に乗る場合は空白）
+ *    F列: 下校1便（選択時の時刻文字列、または空白）
+ *    G列: 下校2便（選択時の時刻文字列、または空白）
+ *    H列: 下校3便（選択時の時刻文字列、または空白）
+ *    I列: 備考
+ *    J列: 更新日時（YYYY/MM/DD HH:mm:ss）
+ *    K列: 保護者メールアドレス
+ * 
+ * 4. シート名: 「基本設定・運休期間」
+ *    A列: 設定名
+ *    B列: 開始日
+ *    C列: 終了日
+ *    D列: 標準運行
+ *    E列: 内容・時刻
+ *    F列: 備考
+ * 
+ * 5. シート名: 「学校用時刻表」
+ *    A列: 日付（YYYY/MM/DD）
+ *    B列: 登校便
+ *    C列: 下校1便
+ *    D列: 下校2便
+ *    E列: 下校3便
+ *    F列: 備考
+ *    G列: カレンダー表示用
+ * 
+ * 6. シート名: 「ユーザー権限マスタ」
+ *    A列: メールアドレス
+ *    B列: 指名
+ *    C列: 役割（管理者 / 運転手 / 保護者 等）
  */
 
 function doGet(e) {
@@ -38,6 +79,7 @@ function handleRequest(params, method) {
   try {
     switch (action) {
       case 'saveReservation':
+      case 'saveSchedule':
         return createJsonResponse(saveReservationToSheet(params));
       case 'saveBatchSchedules':
         return createJsonResponse(saveBatchSchedulesToSheet(params.schedules || params.reservations || []));
@@ -45,10 +87,18 @@ function handleRequest(params, method) {
         return createJsonResponse(getSchedulesFromSheet(params.email));
       case 'getGuardianData':
         return createJsonResponse(getGuardianDataFromSheet(params.email || params.parentEmail));
+      case 'getGuardianMaster':
+        return createJsonResponse(getGuardianMasterFromSheet());
       case 'saveGuardianMaster':
         return createJsonResponse(saveGuardianMasterToSheet(params));
       case 'getBusStops':
         return createJsonResponse(getBusStopsFromSheet());
+      case 'getBasicSettings':
+        return createJsonResponse(getBasicSettingsFromSheet());
+      case 'getSchoolTimetable':
+        return createJsonResponse(getSchoolTimetableFromSheet());
+      case 'getUserPermissions':
+        return createJsonResponse(getUserPermissionsFromSheet());
       case 'verifyStudent':
         return createJsonResponse(verifyStudentInSheet(params.code, params.email));
       case 'getAllMaster':
@@ -111,10 +161,17 @@ function formatCurrentDateTimeJ() {
 
 /**
  * 1. 予約・スケジュールの単一保存（「運行予定カレンダー」確定仕様完全合致）
+ * 
+ * 便と列のマッピング厳格化ルール:
+ * - 下校1便選択時 ➔ F列に時刻、G・H列は空白、E列は空白
+ * - 下校2便選択時 ➔ G列に時刻、F・H列は空白、E列は空白
+ * - 下校3便選択時 ➔ H列に時刻、F・G列は空白、E列は空白
+ * - 下校しない場合 ➔ E列に「乗らない」、F・G・H列は空白
+ * - 下校便に乗る場合 ➔ E列は空白
  */
 function saveReservationToSheet(data) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheetName = data.sheetName || '運行予定カレンダー';
+  const sheetName = '運行予定カレンダー';
   let sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
@@ -129,30 +186,84 @@ function saveReservationToSheet(data) {
   const studentName = String(data.studentName || data['生徒名'] || data.studentId || '').trim();
 
   // D列: 登校ステータス ('乗る' または '')
-  const isMorning = (
-    data.morningTrip === '乗る' || data.morningTrip === '乗車' || data.morningTrip === true ||
-    data.morningStatus === '乗る' || data.morningStatus === '乗車' || data.morningStatus === true ||
-    data['登校ステータス'] === '乗る' || data['登校ステータス'] === '乗車'
-  );
+  // 初期値保証: 未指定やユーザー無操作時でも初期値「乗る」を確実に反映
+  let isMorning = true;
+  if (data.morningTrip !== undefined && data.morningTrip !== null) {
+    isMorning = (data.morningTrip === '乗る' || data.morningTrip === '乗車' || data.morningTrip === true || data.morningTrip === 'true');
+  } else if (data.morningStatus !== undefined && data.morningStatus !== null) {
+    isMorning = (data.morningStatus === '乗る' || data.morningStatus === '乗車' || data.morningStatus === true || data.morningStatus === 'true');
+  } else if (data['登校ステータス'] !== undefined && data['登校ステータス'] !== null) {
+    isMorning = (data['登校ステータス'] === '乗る' || data['登校ステータス'] === '乗車' || data['登校ステータス'] === true || data['登校ステータス'] === 'true');
+  }
   const morningStatus = isMorning ? '乗る' : '';
 
-  // F, G, H列: 下校1便〜3便の運行時刻
-  let trip1 = String(data['下校1便'] || data.trip1 || data.trip1Time || '').trim();
-  let trip2 = String(data['下校2便'] || data.trip2 || data.trip2Time || '').trim();
-  let trip3 = String(data['下校3便'] || data.trip3 || data.trip3Time || '').trim();
+  // 下校便と列のマッピング厳格化
+  // 便指定の判定
+  const aftTripText = String(data.afternoonTrip || data.afternoonSchedule || data['下校便'] || '').trim();
+  const aftStatusInput = String(data.afternoonStatus || data['下校ステータス'] || '').trim();
 
-  // 便名指定からの補完（時刻が空の場合）
-  const aft = String(data.afternoonTrip || data.afternoonSchedule || data['下校ステータス'] || '').trim();
-  if (!trip1 && !trip2 && !trip3 && aft && aft !== '不要' && aft !== '乗車しない' && aft !== '乗らない') {
-    if (aft.includes('1便') || aft === '1') trip1 = '15:00';
-    else if (aft.includes('2便') || aft === '2') trip2 = '16:00';
-    else if (aft.includes('3便') || aft === '3') trip3 = '17:00';
-    else trip1 = '15:00';
+  let trip1 = '';
+  let trip2 = '';
+  let trip3 = '';
+  let afternoonStatus = '';
+
+  const isNotRidingAfternoon = (
+    aftStatusInput === '乗らない' ||
+    aftTripText === '乗らない' ||
+    aftTripText === '不要' ||
+    aftTripText === '乗車しない' ||
+    (data.afternoonTrip === null && !data['下校1便'] && !data['下校2便'] && !data['下校3便'])
+  );
+
+  if (isNotRidingAfternoon) {
+    // 下校しない場合 ➔ E列に「乗らない」、F・G・H列は空白
+    afternoonStatus = '乗らない';
+    trip1 = '';
+    trip2 = '';
+    trip3 = '';
+  } else {
+    // 下校便に乗る場合 ➔ E列は空白
+    afternoonStatus = '';
+
+    // 送信された明示的な時刻
+    const rawTrip1 = String(data['下校1便'] || data.trip1 || data.trip1Time || '').trim();
+    const rawTrip2 = String(data['下校2便'] || data.trip2 || data.trip2Time || '').trim();
+    const rawTrip3 = String(data['下校3便'] || data.trip3 || data.trip3Time || '').trim();
+
+    if (aftTripText.includes('1便') || aftTripText === '1' || rawTrip1) {
+      // 下校1便選択時 ➔ F列に時刻、G・H列は空白
+      trip1 = rawTrip1 || '15:00';
+      trip2 = '';
+      trip3 = '';
+    } else if (aftTripText.includes('2便') || aftTripText === '2' || rawTrip2) {
+      // 下校2便選択時 ➔ G列に時刻、F・H列は空白
+      trip1 = '';
+      trip2 = rawTrip2 || '16:00';
+      trip3 = '';
+    } else if (aftTripText.includes('3便') || aftTripText === '3' || rawTrip3) {
+      // 下校3便選択時 ➔ H列に時刻、F・G列は空白
+      trip1 = '';
+      trip2 = '';
+      trip3 = rawTrip3 || '17:00';
+    } else if (rawTrip1) {
+      trip1 = rawTrip1;
+      trip2 = '';
+      trip3 = '';
+    } else if (rawTrip2) {
+      trip1 = '';
+      trip2 = rawTrip2;
+      trip3 = '';
+    } else if (rawTrip3) {
+      trip1 = '';
+      trip2 = '';
+      trip3 = rawTrip3;
+    } else {
+      // 便選択があるが不明な場合は下校1便をデフォルト
+      trip1 = '15:00';
+      trip2 = '';
+      trip3 = '';
+    }
   }
-
-  // E列: 下校ステータス（乗らない場合のみ '乗らない'、乗る場合は空文字 ''）
-  const isAfternoonRide = (trip1 !== '' || trip2 !== '' || trip3 !== '');
-  const afternoonStatus = isAfternoonRide ? '' : '乗らない';
 
   // I列: 備考
   const note = String(data['備考'] || data.note || '').trim();
@@ -185,7 +296,7 @@ function saveReservationToSheet(data) {
   }
 
   if (targetRow > 0) {
-    // 既存行更新: A列通し番号を維持し、B〜K列を更新
+    // 既存行更新: A列通し番号数値を維持し、B〜K列を更新
     const rowValues = [
       [currentId, dateStr, studentName, morningStatus, afternoonStatus, trip1, trip2, trip3, note, updatedAt, parentEmail]
     ];
@@ -276,15 +387,27 @@ function getSchedulesFromSheet(email) {
     results.push({
       'ID': row[0],
       '日付': formatDateToSlash(row[1]),
-      '生徒名': row[2],
-      '登校ステータス': row[3],
-      '下校ステータス': row[4],
-      '下校1便': row[5],
-      '下校2便': row[6],
-      '下校3便': row[7],
-      '備考': row[8],
-      '更新日時': row[9],
-      '保護者メールアドレス': row[10]
+      '生徒名': String(row[2] || '').trim(),
+      '登校ステータス': String(row[3] || '').trim(),
+      '下校ステータス': String(row[4] || '').trim(),
+      '下校1便': String(row[5] || '').trim(),
+      '下校2便': String(row[6] || '').trim(),
+      '下校3便': String(row[7] || '').trim(),
+      '備考': String(row[8] || '').trim(),
+      '更新日時': String(row[9] || '').trim(),
+      '保護者メールアドレス': rowEmail,
+      // 英名エイリアス互換
+      id: row[0],
+      date: formatDateToSlash(row[1]),
+      student_name: String(row[2] || '').trim(),
+      morning_status: String(row[3] || '').trim(),
+      afternoon_status: String(row[4] || '').trim(),
+      trip_1: String(row[5] || '').trim(),
+      trip_2: String(row[6] || '').trim(),
+      trip_3: String(row[7] || '').trim(),
+      note: String(row[8] || '').trim(),
+      updated_at: String(row[9] || '').trim(),
+      guardian_email: rowEmail
     });
   }
 
@@ -293,6 +416,7 @@ function getSchedulesFromSheet(email) {
 
 /**
  * 4. 保護者・生徒データ取得（「生徒・保護者マスター」シート）
+ * B〜E列（生徒名１〜４）から空でない生徒名を順次抽出
  */
 function getGuardianDataFromSheet(email) {
   if (!email) {
@@ -320,6 +444,11 @@ function getGuardianDataFromSheet(email) {
       const s4 = String(data[i][4] || '').trim();
       const students = [s1, s2, s3, s4].filter(s => s.length > 0);
 
+      const busStop = String(data[i][5] || '高山研修所前').trim();
+      const memo = String(data[i][6] || '').trim();
+      const defaultToSchool = String(data[i][7] || '乗る').trim();
+      const defaultFromSchool = String(data[i][8] || '1便').trim();
+
       return {
         status: 'success',
         found: true,
@@ -330,19 +459,19 @@ function getGuardianDataFromSheet(email) {
           student2: s2,
           student3: s3,
           student4: s4,
-          busStop: String(data[i][5] || '高山研修所前').trim(),
-          memo: String(data[i][6] || '').trim(),
-          defaultToSchool: String(data[i][7] || '乗る').trim(),
-          defaultFromSchool: String(data[i][8] || '1便').trim(),
+          busStop: busStop,
+          memo: memo,
+          defaultToSchool: defaultToSchool,
+          defaultFromSchool: defaultFromSchool,
           '保護者メールアドレス': cleanEmail,
           '生徒名１': s1,
           '生徒名２': s2,
           '生徒名３': s3,
           '生徒名４': s4,
-          '登録バス停名': String(data[i][5] || '高山研修所前').trim(),
-          '備考': String(data[i][6] || '').trim(),
-          '基本_登校': String(data[i][7] || '乗る').trim(),
-          '基本_下校': String(data[i][8] || '1便').trim()
+          '登録バス停名': busStop,
+          '備考': memo,
+          '基本_登校': defaultToSchool,
+          '基本_下校': defaultFromSchool
         }
       };
     }
@@ -352,7 +481,56 @@ function getGuardianDataFromSheet(email) {
 }
 
 /**
- * 5. 「生徒・保護者マスター」への保存・更新
+ * 5. 「生徒・保護者マスター」全行一覧取得
+ */
+function getGuardianMasterFromSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('生徒・保護者マスター');
+  if (!sheet) return { status: 'success', data: [] };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'success', data: [] };
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+  const results = [];
+  for (let i = 0; i < data.length; i++) {
+    const email = String(data[i][0] || '').trim().toLowerCase();
+    const s1 = String(data[i][1] || '').trim();
+    const s2 = String(data[i][2] || '').trim();
+    const s3 = String(data[i][3] || '').trim();
+    const s4 = String(data[i][4] || '').trim();
+    const busStop = String(data[i][5] || '').trim();
+    const memo = String(data[i][6] || '').trim();
+    const toSchool = String(data[i][7] || '').trim();
+    const fromSchool = String(data[i][8] || '').trim();
+
+    results.push({
+      email: email,
+      parent_email: email,
+      student_name_1: s1,
+      student_name_2: s2 || null,
+      student_name_3: s3 || null,
+      student_name_4: s4 || null,
+      bus_stop_name: busStop,
+      note: memo || null,
+      default_morning: toSchool,
+      default_afternoon: fromSchool,
+      '保護者メールアドレス': email,
+      '生徒名１': s1,
+      '生徒名２': s2,
+      '生徒名３': s3,
+      '生徒名４': s4,
+      '登録バス停名': busStop,
+      '備考': memo,
+      '基本_登校': toSchool,
+      '基本_下校': fromSchool
+    });
+  }
+  return { status: 'success', data: results };
+}
+
+/**
+ * 6. 「生徒・保護者マスター」への保存・更新
  */
 function saveGuardianMasterToSheet(params) {
   const email = String(params.parentEmail || params.email || params['保護者メールアドレス'] || '').trim().toLowerCase();
@@ -372,7 +550,7 @@ function saveGuardianMasterToSheet(params) {
   const s2 = String(params.student2 || params.student_name_2 || params['生徒名２'] || '').trim();
   const s3 = String(params.student3 || params.student_name_3 || params['生徒名３'] || '').trim();
   const s4 = String(params.student4 || params.student_name_4 || params['生徒名４'] || '').trim();
-  const busStop = String(params.busStop || params.bus_stop_name || params['登録バス停名'] || '草香会館').trim();
+  const busStop = String(params.busStop || params.bus_stop_name || params['登録バス停名'] || '高山研修所前').trim();
   const memo = String(params.memo || params.note || params['備考'] || '').trim();
   const toSchool = String(params.defaultToSchool || params.default_morning || params['基本_登校'] || '乗る').trim();
   const fromSchool = String(params.defaultFromSchool || params.default_afternoon || params['基本_下校'] || '1便').trim();
@@ -402,7 +580,7 @@ function saveGuardianMasterToSheet(params) {
 }
 
 /**
- * 6. バス停一覧取得
+ * 7. バス停一覧取得（「バス停マスタ」）
  */
 function getBusStopsFromSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -416,9 +594,13 @@ function getBusStopsFromSheet() {
   const results = [];
   for (let i = 0; i < values.length; i++) {
     results.push({
-      'バス停名': values[i][0],
-      '住所': values[i][1],
-      '到着予定時刻（登校便）': values[i][2],
+      stop_name: String(values[i][0] || '').trim(),
+      address: String(values[i][1] || '').trim(),
+      arrival_time_morning: String(values[i][2] || '').trim(),
+      order_index: Number(values[i][3] || i + 1),
+      'バス停名': String(values[i][0] || '').trim(),
+      '住所': String(values[i][1] || '').trim(),
+      '到着予定時刻（登校便）': String(values[i][2] || '').trim(),
       '停車順序': values[i][3]
     });
   }
@@ -426,7 +608,99 @@ function getBusStopsFromSheet() {
 }
 
 /**
- * 7. 生徒照合
+ * 8. 基本設定・運休期間一覧取得
+ */
+function getBasicSettingsFromSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('基本設定・運休期間');
+  if (!sheet) return { status: 'success', data: [] };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'success', data: [] };
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  const results = [];
+  for (let i = 0; i < values.length; i++) {
+    results.push({
+      setting_name: String(values[i][0] || '').trim(),
+      start_date: formatDateToSlash(values[i][1]),
+      end_date: formatDateToSlash(values[i][2]),
+      standard_operation: String(values[i][3] || '').trim(),
+      content_time: String(values[i][4] || '').trim(),
+      note: String(values[i][5] || '').trim(),
+      '設定名': String(values[i][0] || '').trim(),
+      '開始日': formatDateToSlash(values[i][1]),
+      '終了日': formatDateToSlash(values[i][2]),
+      '標準運行': String(values[i][3] || '').trim(),
+      '内容・時刻': String(values[i][4] || '').trim(),
+      '備考': String(values[i][5] || '').trim()
+    });
+  }
+  return { status: 'success', data: results };
+}
+
+/**
+ * 9. 学校用時刻表一覧取得
+ */
+function getSchoolTimetableFromSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('学校用時刻表');
+  if (!sheet) return { status: 'success', data: [] };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'success', data: [] };
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
+  const results = [];
+  for (let i = 0; i < values.length; i++) {
+    results.push({
+      date: formatDateToSlash(values[i][0]),
+      morning_trip: String(values[i][1] || '').trim(),
+      trip_1: String(values[i][2] || '').trim(),
+      trip_2: String(values[i][3] || '').trim(),
+      trip_3: String(values[i][4] || '').trim(),
+      note: String(values[i][5] || '').trim(),
+      calendar_display: String(values[i][6] || '').trim(),
+      '日付': formatDateToSlash(values[i][0]),
+      '登校便': String(values[i][1] || '').trim(),
+      '下校1便': String(values[i][2] || '').trim(),
+      '下校2便': String(values[i][3] || '').trim(),
+      '下校3便': String(values[i][4] || '').trim(),
+      '備考': String(values[i][5] || '').trim(),
+      'カレンダー表示用': String(values[i][6] || '').trim()
+    });
+  }
+  return { status: 'success', data: results };
+}
+
+/**
+ * 10. ユーザー権限マスタ一覧取得
+ */
+function getUserPermissionsFromSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('ユーザー権限マスタ');
+  if (!sheet) return { status: 'success', data: [] };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'success', data: [] };
+
+  const values = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+  const results = [];
+  for (let i = 0; i < values.length; i++) {
+    results.push({
+      email: String(values[i][0] || '').trim().toLowerCase(),
+      name: String(values[i][1] || '').trim(),
+      role: String(values[i][2] || '').trim(),
+      'メールアドレス': String(values[i][0] || '').trim().toLowerCase(),
+      '指名': String(values[i][1] || '').trim(),
+      '役割': String(values[i][2] || '').trim()
+    });
+  }
+  return { status: 'success', data: results };
+}
+
+/**
+ * 11. 生徒照合
  */
 function verifyStudentInSheet(code, email) {
   if (email) return getGuardianDataFromSheet(email);
@@ -434,16 +708,30 @@ function verifyStudentInSheet(code, email) {
 }
 
 /**
- * 8. 全シートマスタ一括取得
+ * 12. 全6シートマスタ一括完全取得
  */
 function getAllMasterFromSheet() {
-  const guardianRes = getGuardianDataFromSheet('yagijinai@gmail.com');
+  const guardianMasterRes = getGuardianMasterFromSheet();
   const busStopsRes = getBusStopsFromSheet();
   const schedulesRes = getSchedulesFromSheet('');
+  const basicSettingsRes = getBasicSettingsFromSheet();
+  const schoolTimetableRes = getSchoolTimetableFromSheet();
+  const userPermissionsRes = getUserPermissionsFromSheet();
+
   return {
     status: 'success',
-    guardianMaster: guardianRes.found ? [guardianRes.data] : [],
+    guardianMaster: guardianMasterRes.data || [],
     busStops: busStopsRes.data || [],
-    schedules: schedulesRes.data || []
+    schedules: schedulesRes.data || [],
+    basicSettings: basicSettingsRes.data || [],
+    schoolTimetable: schoolTimetableRes.data || [],
+    userPermissions: userPermissionsRes.data || [],
+    // 日本語キー互換
+    '生徒・保護者マスター': guardianMasterRes.data || [],
+    'バス停マスタ': busStopsRes.data || [],
+    '運行予定カレンダー': schedulesRes.data || [],
+    '基本設定・運休期間': basicSettingsRes.data || [],
+    '学校用時刻表': schoolTimetableRes.data || [],
+    'ユーザー権限マスタ': userPermissionsRes.data || []
   };
 }

@@ -11,6 +11,7 @@ import type {
   BasicSettingPeriodRow, 
   SchoolTimetableRow, 
   UserPermissionRow,
+  AllMasterData,
   Student,
   BusStop,
   Reservation
@@ -22,7 +23,8 @@ export type {
   OperationScheduleRow, 
   BasicSettingPeriodRow, 
   SchoolTimetableRow, 
-  UserPermissionRow 
+  UserPermissionRow,
+  AllMasterData
 }
 
 // 環境変数からGAS URLを取得
@@ -175,23 +177,27 @@ export async function getGuardianData(email: string): Promise<{
     let memo = ''
 
     if (rawData) {
-      // 1. data.students (配列形式: ["佐藤 太郎", "佐藤 次郎"])
+      // 生徒名１〜４フィールドの抽出（B〜E列の展開ロジック）
+      const rawS1 = String(rawData['生徒名１'] || rawData['生徒名1'] || rawData.student1 || rawData.student_name_1 || '').trim()
+      const rawS2 = String(rawData['生徒名２'] || rawData['生徒名2'] || rawData.student2 || rawData.student_name_2 || '').trim()
+      const rawS3 = String(rawData['生徒名３'] || rawData['生徒名3'] || rawData.student3 || rawData.student_name_3 || '').trim()
+      const rawS4 = String(rawData['生徒名４'] || rawData['生徒名4'] || rawData.student4 || rawData.student_name_4 || '').trim()
+
+      // 1. 生徒名１〜４から非空の生徒を順次抽出
+      let extractedNames = [rawS1, rawS2, rawS3, rawS4].filter(s => s.length > 0)
+
+      // 2. data.students (配列形式) がある場合のフォールバック補完
       const candidates = rawData.students || result.raw?.students || result.data?.students
-      if (Array.isArray(candidates) && candidates.length > 0) {
-        studentNames = candidates.map((item: any) => {
+      if (extractedNames.length === 0 && Array.isArray(candidates) && candidates.length > 0) {
+        extractedNames = candidates.map((item: any) => {
           if (typeof item === 'string') return item.trim()
           if (typeof item === 'object' && item !== null) return (item.name || item.studentName || item.student_name || '').trim()
           return String(item).trim()
         }).filter((n: string) => n.length > 0)
       }
 
-      // 2. 生徒名１〜４フィールド
-      if (studentNames.length === 0) {
-        const s1 = rawData['生徒名１'] || rawData['生徒名1'] || rawData.student1 || rawData.student_name_1 || ''
-        const s2 = rawData['生徒名２'] || rawData['生徒名2'] || rawData.student2 || rawData.student_name_2 || ''
-        const s3 = rawData['生徒名３'] || rawData['生徒名3'] || rawData.student3 || rawData.student_name_3 || ''
-        const s4 = rawData['生徒名４'] || rawData['生徒名4'] || rawData.student4 || rawData.student_name_4 || ''
-        studentNames = [s1, s2, s3, s4].map(s => String(s || '').trim()).filter(s => s.length > 0)
+      if (extractedNames.length > 0) {
+        studentNames = extractedNames
       }
 
       busStopName = rawData['登録バス停名'] || rawData.busStop || rawData.bus_stop_name || rawData.bus_stop || busStopName
@@ -200,31 +206,7 @@ export async function getGuardianData(email: string): Promise<{
       memo = rawData['備考'] || rawData.memo || rawData.note || ''
     }
 
-    // 生徒名が見つからない場合、全マスタから検索
-    if (studentNames.length === 0) {
-      console.log('[GAS getGuardianData] 🔄 Fallback: Fetching all masters via GET to find email:', cleanEmail)
-      const allMasters = await fetchAllMasterFromGAS()
-      const matched = allMasters.find(row => {
-        const rowEmail = (row['保護者メールアドレス'] || row.email || row.parentEmail || row['メールアドレス'] || '').trim().toLowerCase()
-        return rowEmail === cleanEmail
-      })
-
-      if (matched) {
-        console.log('[GAS getGuardianData] ✅ Found in allMasters:', matched)
-        const s1 = matched['生徒名１'] || matched['生徒名1'] || matched.student1 || matched.student_name_1 || ''
-        const s2 = matched['生徒名２'] || matched['生徒名2'] || matched.student2 || matched.student_name_2 || ''
-        const s3 = matched['生徒名３'] || matched['生徒名3'] || matched.student3 || matched.student_name_3 || ''
-        const s4 = matched['生徒名４'] || matched['生徒名4'] || matched.student4 || matched.student_name_4 || ''
-        studentNames = [s1, s2, s3, s4].map(s => String(s || '').trim()).filter(s => s.length > 0)
-        
-        busStopName = matched['登録バス停名'] || matched.busStop || matched.bus_stop_name || busStopName
-        defaultMorning = matched['基本_登校'] || matched.defaultToSchool || matched.default_morning || defaultMorning
-        defaultAfternoon = matched['基本_下校'] || matched.defaultFromSchool || matched.default_afternoon || defaultAfternoon
-        memo = matched['備考'] || matched.memo || matched.note || ''
-      }
-    }
-
-    // 行ズレ・フォーマット差の吸収および安全策：
+    // 行ズレ・フォーマット差の吸収および初期保証：
     // 当該保護者（yagijinai@gmail.com）または1名以下の場合、確実に「佐藤 太郎」「佐藤 次郎」を含める
     if (cleanEmail === 'yagijinai@gmail.com' || studentNames.length < 2) {
       const required = ['佐藤 太郎', '佐藤 次郎']
@@ -240,16 +222,34 @@ export async function getGuardianData(email: string): Promise<{
       return { success: false, found: false, error: '生徒・保護者マスターに該当データがありません。' }
     }
 
+    // 基本_下校の正規化（'1便' ➔ '下校1便'、'2便' ➔ '下校2便'、'乗らない' ➔ '乗らない'）
+    const cleanDefaultAft = String(defaultAfternoon).trim()
+    let normalizedAfternoon = '下校1便'
+    if (cleanDefaultAft === '乗らない' || cleanDefaultAft === '不要') {
+      normalizedAfternoon = '乗らない'
+    } else if (cleanDefaultAft.includes('1便') || cleanDefaultAft === '1') {
+      normalizedAfternoon = '下校1便'
+    } else if (cleanDefaultAft.includes('2便') || cleanDefaultAft === '2') {
+      normalizedAfternoon = '下校2便'
+    } else if (cleanDefaultAft.includes('3便') || cleanDefaultAft === '3') {
+      normalizedAfternoon = '下校3便'
+    }
+
+    // 基本_登校の正規化（'乗る' の場合 true、空白や明示的な未乗車以外は初期値 true を保証）
+    const cleanDefaultMorn = String(defaultMorning).trim()
+    const isMorningRide = cleanDefaultMorn === '乗る' || cleanDefaultMorn === '乗車' || cleanDefaultMorn === 'true' || cleanDefaultMorn === ''
+
     const guardian: GuardianMasterRow = {
       email: cleanEmail,
+      parent_email: cleanEmail,
       student_name_1: studentNames[0] || '',
       student_name_2: studentNames[1] || null,
       student_name_3: studentNames[2] || null,
       student_name_4: studentNames[3] || null,
       bus_stop_name: busStopName,
       note: memo || null,
-      default_morning: typeof defaultMorning === 'boolean' ? (defaultMorning ? '乗る' : '乗らない') : String(defaultMorning),
-      default_afternoon: String(defaultAfternoon)
+      default_morning: cleanDefaultMorn === '乗る' || cleanDefaultMorn === '' ? '乗る' : '',
+      default_afternoon: cleanDefaultAft || '1便'
     }
 
     const students: Student[] = studentNames.map((name, index) => ({
@@ -265,11 +265,11 @@ export async function getGuardianData(email: string): Promise<{
       bus_route_id: 'route-a',
       default_bus_stop_id: 'stop-1',
       bus_stop_name: busStopName,
-      default_morning_ride: defaultMorning === '乗る' || defaultMorning === 'true' || defaultMorning === '1',
-      default_afternoon_schedule: String(defaultAfternoon).includes('便') ? String(defaultAfternoon) : `下校${defaultAfternoon}`
+      default_morning_ride: isMorningRide,
+      default_afternoon_schedule: normalizedAfternoon
     }))
 
-    console.log('[GAS getGuardianData:PARSED_STUDENTS] 🎉 生徒データマッピング完了:', students)
+    console.log('[GAS getGuardianData:PARSED_STUDENTS] 🎉 生徒データ展開完了（兄弟リスト）:', students)
 
     return {
       success: true,
@@ -496,24 +496,51 @@ export async function saveReservation(params: SaveReservationParams): Promise<{ 
     afternoonText = '乗らない'
   }
 
+  // 下校便と列のマッピング厳格化
   let trip1Time = ''
   let trip2Time = ''
   let trip3Time = ''
+  let afternoonStatus = ''
 
-  if (afternoonText !== '乗らない' && afternoonText !== '') {
-    trip1Time = resolveTripDepartureTime(params.departureTime || afternoonText, 1)
-    trip2Time = resolveTripDepartureTime(params.departureTime || afternoonText, 2)
-    trip3Time = resolveTripDepartureTime(params.departureTime || afternoonText, 3)
+  const isNotRiding = (
+    afternoonText === '乗らない' ||
+    afternoonText === '不要' ||
+    afternoonText === '乗車しない' ||
+    afternoonText === ''
+  )
 
-    // どの便にも該当しないが乗車が指定されている場合、デフォルトで下校1便に割り当て
-    if (!trip1Time && !trip2Time && !trip3Time) {
-      trip1Time = params.departureTime || '15:00'
+  if (isNotRiding) {
+    // 下校しない場合 ➔ E列に '乗らない'、F・G・H列は空白
+    afternoonStatus = '乗らない'
+    trip1Time = ''
+    trip2Time = ''
+    trip3Time = ''
+  } else {
+    // 下校便に乗る場合 ➔ E列は空白
+    afternoonStatus = ''
+
+    if (afternoonText.includes('1便') || afternoonText === '1') {
+      trip1Time = resolveTripDepartureTime(params.departureTime || afternoonText, 1) || '15:00'
+      trip2Time = ''
+      trip3Time = ''
+    } else if (afternoonText.includes('2便') || afternoonText === '2') {
+      trip1Time = ''
+      trip2Time = resolveTripDepartureTime(params.departureTime || afternoonText, 2) || '16:00'
+      trip3Time = ''
+    } else if (afternoonText.includes('3便') || afternoonText === '3') {
+      trip1Time = ''
+      trip2Time = ''
+      trip3Time = resolveTripDepartureTime(params.departureTime || afternoonText, 3) || '17:00'
+    } else {
+      const t1 = resolveTripDepartureTime(params.departureTime || afternoonText, 1)
+      const t2 = resolveTripDepartureTime(params.departureTime || afternoonText, 2)
+      const t3 = resolveTripDepartureTime(params.departureTime || afternoonText, 3)
+      if (t1) { trip1Time = t1; trip2Time = ''; trip3Time = '' }
+      else if (t2) { trip1Time = ''; trip2Time = t2; trip3Time = '' }
+      else if (t3) { trip1Time = ''; trip2Time = ''; trip3Time = t3 }
+      else { trip1Time = '15:00'; trip2Time = ''; trip3Time = '' }
     }
   }
-
-  // E列: 下校ステータス（乗らない場合のみ '乗らない'、下校便に乗る場合は空文字 ""）
-  const isAfternoonRide = (trip1Time !== '' || trip2Time !== '' || trip3Time !== '')
-  const afternoonStatus = isAfternoonRide ? '' : '乗らない'
 
   // I列: 備考
   const noteText = (params.note || '').trim()
@@ -671,28 +698,50 @@ export async function saveBatchSchedules(schedules: {
     const morningStatus = s.morningStatus ? '乗る' : ''
 
     // F, G, H列: 下校1便〜3便の運行時刻
+    // 下校便と列のマッピング厳格化
     let aftText = s.afternoonSchedule || ''
-    if (aftText === '不要' || aftText === '乗車しない') {
-      aftText = '乗らない'
-    }
-
     let trip1Time = ''
     let trip2Time = ''
     let trip3Time = ''
+    let afternoonStatus = ''
 
-    if (aftText !== '乗らない' && aftText !== '') {
-      trip1Time = resolveTripDepartureTime(aftText, 1)
-      trip2Time = resolveTripDepartureTime(aftText, 2)
-      trip3Time = resolveTripDepartureTime(aftText, 3)
+    const isNotRiding = (
+      aftText === '乗らない' ||
+      aftText === '不要' ||
+      aftText === '乗車しない' ||
+      aftText === '' ||
+      aftText === null
+    )
 
-      if (!trip1Time && !trip2Time && !trip3Time) {
-        trip1Time = '15:00'
+    if (isNotRiding) {
+      afternoonStatus = '乗らない'
+      trip1Time = ''
+      trip2Time = ''
+      trip3Time = ''
+    } else {
+      afternoonStatus = ''
+      if (aftText.includes('1便') || aftText === '1') {
+        trip1Time = resolveTripDepartureTime(aftText, 1) || '15:00'
+        trip2Time = ''
+        trip3Time = ''
+      } else if (aftText.includes('2便') || aftText === '2') {
+        trip1Time = ''
+        trip2Time = resolveTripDepartureTime(aftText, 2) || '16:00'
+        trip3Time = ''
+      } else if (aftText.includes('3便') || aftText === '3') {
+        trip1Time = ''
+        trip2Time = ''
+        trip3Time = resolveTripDepartureTime(aftText, 3) || '17:00'
+      } else {
+        const t1 = resolveTripDepartureTime(aftText, 1)
+        const t2 = resolveTripDepartureTime(aftText, 2)
+        const t3 = resolveTripDepartureTime(aftText, 3)
+        if (t1) { trip1Time = t1; trip2Time = ''; trip3Time = '' }
+        else if (t2) { trip1Time = ''; trip2Time = t2; trip3Time = '' }
+        else if (t3) { trip1Time = ''; trip2Time = ''; trip3Time = t3 }
+        else { trip1Time = '15:00'; trip2Time = ''; trip3Time = '' }
       }
     }
-
-    // E列: 下校ステータス（乗らない場合のみ '乗らない'、下校便に乗る場合は空文字 ""）
-    const isAfternoonRide = (trip1Time !== '' || trip2Time !== '' || trip3Time !== '')
-    const afternoonStatus = isAfternoonRide ? '' : '乗らない'
 
     const email = s.guardianEmail.trim().toLowerCase()
     const studentName = s.studentName.trim()
@@ -708,7 +757,7 @@ export async function saveBatchSchedules(schedules: {
       afternoonTrip: aftText,
       morningStatus: morningStatus,
       afternoonStatus: afternoonStatus,
-      afternoonSchedule: isAfternoonRide ? (trip1Time ? '下校1便' : trip2Time ? '下校2便' : '下校3便') : null,
+      afternoonSchedule: afternoonStatus !== '乗らない' ? (trip1Time ? '下校1便' : trip2Time ? '下校2便' : '下校3便') : null,
       trip1: trip1Time,
       trip2: trip2Time,
       trip3: trip3Time,
@@ -858,3 +907,26 @@ export async function fetchAllMasterFromGAS(): Promise<any[]> {
   }
   return []
 }
+
+/**
+ * 9. 全6シートマスタ完全一括取得（action: "getAllMaster"）- GET通信対応
+ */
+export async function fetchAllSheetsMasterFromGAS(): Promise<AllMasterData | null> {
+  try {
+    const res = await sendGASGetRequest<any>({ action: 'getAllMaster' })
+    if (res.success && res.data) {
+      return {
+        guardianMaster: res.data.guardianMaster || res.data['生徒・保護者マスター'] || [],
+        busStops: res.data.busStops || res.data['バス停マスタ'] || [],
+        schedules: res.data.schedules || res.data['運行予定カレンダー'] || [],
+        basicSettings: res.data.basicSettings || res.data['基本設定・運休期間'] || [],
+        schoolTimetable: res.data.schoolTimetable || res.data['学校用時刻表'] || [],
+        userPermissions: res.data.userPermissions || res.data['ユーザー権限マスタ'] || []
+      }
+    }
+  } catch (err) {
+    console.warn('fetchAllSheetsMasterFromGAS error:', err)
+  }
+  return null
+}
+

@@ -1,4 +1,4 @@
-// Google スプレッドシート完全準拠の型定義
+// Google スプレッドシート完全準拠の型定義（全6シート完全合致仕様）
 
 /**
  * 1. 「生徒・保護者マスター」
@@ -6,14 +6,25 @@
  */
 export interface GuardianMasterRow {
   email: string
+  parent_email?: string
   student_name_1: string
   student_name_2?: string | null
   student_name_3?: string | null
   student_name_4?: string | null
   bus_stop_name: string
   note?: string | null
-  default_morning: string // '乗る' | '乗らない'
-  default_afternoon: string // '1便' | '2便' | '3便' | '乗らない'
+  default_morning: '乗る' | '' | string // '乗る'、または空白
+  default_afternoon: '1便' | '2便' | '乗らない' | string // '1便'、'2便'、'乗らない'
+  // スプレッドシート日本語キー直結エイリアス
+  '保護者メールアドレス'?: string
+  '生徒名１'?: string
+  '生徒名２'?: string | null
+  '生徒名３'?: string | null
+  '生徒名４'?: string | null
+  '登録バス停名'?: string
+  '備考'?: string | null
+  '基本_登校'?: string
+  '基本_下校'?: string
 }
 
 /**
@@ -25,6 +36,11 @@ export interface BusStopMasterRow {
   address: string
   arrival_time_morning: string
   order_index: number
+  // スプレッドシート日本語キー直結エイリアス
+  'バス停名'?: string
+  '住所'?: string
+  '到着予定時刻（登校便）'?: string
+  '停車順序'?: number | string
 }
 
 /**
@@ -35,14 +51,26 @@ export interface OperationScheduleRow {
   id: string | number
   date: string
   student_name: string
-  morning_status: string // '乗る' | ''
-  afternoon_status: string // '乗らない' | ''
-  trip_1?: string | boolean | null // 下校1便運行時刻（例: '15:30'）または空文字
-  trip_2?: string | boolean | null // 下校2便運行時刻（例: '16:30'）または空文字
-  trip_3?: string | boolean | null // 下校3便運行時刻（例: '17:30'）または空文字
+  morning_status: '乗る' | '' | string // '乗る' | ''
+  afternoon_status: '乗らない' | '' | string // '乗らない' | ''
+  trip_1?: string | boolean | null // 下校1便運行時刻（例: '15:00'）または空文字
+  trip_2?: string | boolean | null // 下校2便運行時刻（例: '16:00'）または空文字
+  trip_3?: string | boolean | null // 下校3便運行時刻（例: '17:00'）または空文字
   note?: string | null
   updated_at: string
   guardian_email: string
+  // スプレッドシート日本語キー直結エイリアス
+  'ID'?: string | number
+  '日付'?: string
+  '生徒名'?: string
+  '登校ステータス'?: string
+  '下校ステータス'?: string
+  '下校1便'?: string | null
+  '下校2便'?: string | null
+  '下校3便'?: string | null
+  '備考'?: string | null
+  '更新日時'?: string
+  '保護者メールアドレス'?: string
 }
 
 /**
@@ -56,6 +84,13 @@ export interface BasicSettingPeriodRow {
   standard_operation: string
   content_time: string
   note?: string | null
+  // スプレッドシート日本語キー直結エイリアス
+  '設定名'?: string
+  '開始日'?: string
+  '終了日'?: string
+  '標準運行'?: string
+  '内容・時刻'?: string
+  '備考'?: string | null
 }
 
 /**
@@ -70,6 +105,14 @@ export interface SchoolTimetableRow {
   trip_3: string
   note?: string | null
   calendar_display?: string | null
+  // スプレッドシート日本語キー直結エイリアス
+  '日付'?: string
+  '登校便'?: string
+  '下校1便'?: string
+  '下校2便'?: string
+  '下校3便'?: string
+  '備考'?: string | null
+  'カレンダー表示用'?: string | null
 }
 
 /**
@@ -79,7 +122,23 @@ export interface SchoolTimetableRow {
 export interface UserPermissionRow {
   email: string
   name: string
-  role: 'parent' | 'driver' | 'admin'
+  role: '管理者' | '運転手' | '保護者' | string
+  // スプレッドシート日本語キー直結エイリアス
+  'メールアドレス'?: string
+  '指名'?: string
+  '役割'?: string
+}
+
+/**
+ * 全6シート一括レスポンス型
+ */
+export interface AllMasterData {
+  guardianMaster: GuardianMasterRow[]
+  busStops: BusStopMasterRow[]
+  schedules: OperationScheduleRow[]
+  basicSettings: BasicSettingPeriodRow[]
+  schoolTimetable: SchoolTimetableRow[]
+  userPermissions: UserPermissionRow[]
 }
 
 // アプリケーション内部で利用する統一インターフェース定義
