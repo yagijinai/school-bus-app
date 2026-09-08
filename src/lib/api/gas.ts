@@ -915,11 +915,15 @@ export async function fetchAllSheetsMasterFromGAS(): Promise<AllMasterData | nul
   try {
     const res = await sendGASGetRequest<any>({ action: 'getAllMaster' })
     if (res.success && res.data) {
+      const basicSettings = res.data.basicSettings || res.data['基本設定・運休期間'] || []
+      if (Array.isArray(basicSettings) && basicSettings.length > 0) {
+        console.log('[BasicSettings] 取得成功:', basicSettings)
+      }
       return {
         guardianMaster: res.data.guardianMaster || res.data['生徒・保護者マスター'] || [],
         busStops: res.data.busStops || res.data['バス停マスタ'] || [],
         schedules: res.data.schedules || res.data['運行予定カレンダー'] || [],
-        basicSettings: res.data.basicSettings || res.data['基本設定・運休期間'] || [],
+        basicSettings: basicSettings,
         schoolTimetable: res.data.schoolTimetable || res.data['学校用時刻表'] || [],
         userPermissions: res.data.userPermissions || res.data['ユーザー権限マスタ'] || []
       }
@@ -929,4 +933,78 @@ export async function fetchAllSheetsMasterFromGAS(): Promise<AllMasterData | nul
   }
   return null
 }
+
+/**
+ * 10. 基本設定・運休期間の単独取得（action: "getBasicSettings"）- GET通信対応
+ * スプレッドシート「基本設定・運休期間」シートの全行を取得
+ */
+export async function fetchBasicSettingsFromGAS(): Promise<BasicSettingPeriodRow[]> {
+  try {
+    console.log('[BasicSettings] 🔄 スプレッドシートから基本設定・運休期間を取得中...')
+    const res = await sendGASGetRequest<BasicSettingPeriodRow[]>({ action: 'getBasicSettings' })
+    if (res.success && Array.isArray(res.data)) {
+      const formatted: BasicSettingPeriodRow[] = res.data.map((row: any) => ({
+        setting_name: String(row.setting_name || row['設定名'] || '').trim(),
+        start_date: formatDateToSlash(row.start_date || row['開始日'] || ''),
+        end_date: formatDateToSlash(row.end_date || row['終了日'] || ''),
+        standard_operation: String(row.standard_operation || row['標準運行'] || '').trim(),
+        content_time: String(row.content_time || row['内容・時刻'] || '').trim(),
+        note: String(row.note || row['備考'] || '').trim(),
+        '設定名': String(row.setting_name || row['設定名'] || '').trim(),
+        '開始日': formatDateToSlash(row.start_date || row['開始日'] || ''),
+        '終了日': formatDateToSlash(row.end_date || row['終了日'] || ''),
+        '標準運行': String(row.standard_operation || row['標準運行'] || '').trim(),
+        '内容・時刻': String(row.content_time || row['内容・時刻'] || '').trim(),
+        '備考': String(row.note || row['備考'] || '').trim()
+      }))
+      console.log('[BasicSettings] 取得成功:', formatted)
+      return formatted
+    } else {
+      console.warn('[BasicSettings] ⚠️ 取得データが空またはエラー:', res)
+    }
+  } catch (err) {
+    console.error('[BasicSettings] ❌ 取得エラー:', err)
+  }
+  return []
+}
+
+/**
+ * 11. 基本設定・運休期間の保存・更新（action: "saveBasicSetting"）- 管理者限定
+ * スプレッドシート「基本設定・運休期間」シートの指定行（A列: 設定名一致）を上書き更新
+ */
+export async function saveBasicSetting(payload: {
+  setting_name: string
+  start_date?: string
+  end_date?: string
+  standard_operation?: string
+  content_time?: string
+  note?: string
+}): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const postBody = {
+      action: 'saveBasicSetting',
+      setting_name: String(payload.setting_name || '').trim(),
+      start_date: payload.start_date ? formatDateToSlash(payload.start_date) : '',
+      end_date: payload.end_date ? formatDateToSlash(payload.end_date) : '',
+      standard_operation: String(payload.standard_operation || '').trim(),
+      content_time: String(payload.content_time || '').trim(),
+      note: String(payload.note || '').trim()
+    }
+
+    console.log('[GAS saveBasicSetting] 📤 送信リクエスト:', postBody)
+    const res = await sendGASRequest(postBody)
+    if (res.success) {
+      console.log('[GAS saveBasicSetting] ✅ 保存成功:', res)
+      return { success: true, message: res.message || '基本設定を更新しました' }
+    } else {
+      console.error('[GAS saveBasicSetting] ❌ 保存失敗:', res)
+      return { success: false, error: res.error || res.message || '更新に失敗しました' }
+    }
+  } catch (err: any) {
+    console.error('[GAS saveBasicSetting] ❌ 例外エラー:', err)
+    return { success: false, error: err.message || '通信エラーが発生しました' }
+  }
+}
+
+
 

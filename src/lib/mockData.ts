@@ -183,10 +183,19 @@ export const mockSpecialTripSchedules: SpecialTripSchedule[] = [
 // 長期休業・学校休業期間（サンプル）
 export const mockSchoolHolidays: SchoolHoliday[] = [
   {
+    id: 'sh-spring-2026',
+    holiday_name: '春季休業期間（春休み）',
+    start_date: '2026-03-26',
+    end_date: '2026-04-06',
+    holiday_type: 'spring',
+    note: '新年度準備・全便運休',
+    created_at: new Date().toISOString()
+  },
+  {
     id: 'sh-summer-2026',
     holiday_name: '夏季休業期間（夏休み）',
     start_date: '2026-07-21',
-    end_date: '2026-08-28',
+    end_date: '2026-08-24',
     holiday_type: 'summer',
     note: '全便運休（登校日を除く）',
     created_at: new Date().toISOString()
@@ -204,18 +213,9 @@ export const mockSchoolHolidays: SchoolHoliday[] = [
     id: 'sh-winter-2026',
     holiday_name: '冬季休業期間（冬休み）',
     start_date: '2026-12-25',
-    end_date: '2027-01-07',
+    end_date: '2026-01-06',
     holiday_type: 'winter',
     note: '全便運休',
-    created_at: new Date().toISOString()
-  },
-  {
-    id: 'sh-spring-2027',
-    holiday_name: '春季休業期間（春休み）',
-    start_date: '2027-03-25',
-    end_date: '2027-04-06',
-    holiday_type: 'spring',
-    note: '新年度準備・全便運休',
     created_at: new Date().toISOString()
   }
 ]

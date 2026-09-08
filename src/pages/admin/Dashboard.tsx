@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useAuth } from '../../context/AuthContext'
-import type { Student, BusStop, SchoolHoliday } from '../../types/app'
+import type { Student, BusStop, SchoolHoliday, BasicSettingPeriodRow } from '../../types/app'
 import { ExportAndPrintModal } from '../../components/admin/ExportAndPrintModal'
 import { SystemMaintenanceTab } from '../../components/admin/SystemMaintenanceTab'
 import { saveGuardianMaster, fetchAllMasterFromGAS } from '../../lib/api/gas'
@@ -44,6 +44,7 @@ export const AdminDashboard: React.FC = () => {
     busRoutes, busStops, students, 
     reservations, busOperations, rideStatuses, 
     monthlyTripSchedules, specialTripSchedules, schoolHolidays,
+    basicSettings, refreshBasicSettings, updateBasicSetting,
     getDateScheduleStatus, getTripTime, getAdjustedStopArrivalTime, isTripOperating, 
     updateMonthlyTripSchedule, resetMonthlyTripSchedulesToDefault, copySchoolHolidaysToNextYear,
     saveSpecialTripSchedule, deleteSpecialTripSchedule,
@@ -52,6 +53,94 @@ export const AdminDashboard: React.FC = () => {
     addBusStop, updateBusStop, deleteBusStop, reorderBusStops,
     refreshData 
   } = useAuth()
+
+  // 基本設定・運休期間のGAS再取得状態
+  const [isSyncingBasicSettings, setIsSyncingBasicSettings] = useState(false)
+  const handleRefreshBasicSettings = async () => {
+    setIsSyncingBasicSettings(true)
+    try {
+      await refreshBasicSettings()
+    } finally {
+      setIsSyncingBasicSettings(false)
+    }
+  }
+
+  // 基本設定・運休期間の即時自動保存状態（行キー単位）
+  const [savingRowKeys, setSavingRowKeys] = useState<Record<string, boolean>>({})
+  const [savedRowKeys, setSavedRowKeys] = useState<Record<string, boolean>>({})
+  // 入力途中のドラフト（テキスト項目・日付項目用）
+  const [basicSettingDrafts, setBasicSettingDrafts] = useState<Record<string, {
+    start_date?: string
+    end_date?: string
+    standard_operation?: string
+    content_time?: string
+    note?: string
+  }>>({})
+
+  const handleBasicSettingDraftChange = (settingName: string, field: string, value: string) => {
+    setBasicSettingDrafts(prev => ({
+      ...prev,
+      [settingName]: {
+        ...(prev[settingName] || {}),
+        [field]: value
+      }
+    }))
+  }
+
+  const handleAutoSaveBasicSetting = async (
+    settingName: string,
+    field: 'start_date' | 'end_date' | 'standard_operation' | 'content_time' | 'note',
+    value: string
+  ) => {
+    const row = basicSettings.find(b => (b.setting_name || b['設定名']) === settingName)
+    const draft = basicSettingDrafts[settingName] || {}
+
+    const startDate = field === 'start_date' ? value : (draft.start_date !== undefined ? draft.start_date : (row?.start_date || row?.['開始日'] || ''))
+    const endDate = field === 'end_date' ? value : (draft.end_date !== undefined ? draft.end_date : (row?.end_date || row?.['終了日'] || ''))
+    const standardOperation = field === 'standard_operation' ? value : (draft.standard_operation !== undefined ? draft.standard_operation : (row?.standard_operation || row?.['標準運行'] || ''))
+    const contentTime = field === 'content_time' ? value : (draft.content_time !== undefined ? draft.content_time : (row?.content_time || row?.['内容・時刻'] || ''))
+    const note = field === 'note' ? value : (draft.note !== undefined ? draft.note : (row?.note || row?.['備考'] || ''))
+
+    // 現在値と比較して変化がなければスキップ
+    const origVal = row ? (
+      field === 'start_date' ? (row.start_date || row['開始日'] || '') :
+      field === 'end_date' ? (row.end_date || row['終了日'] || '') :
+      field === 'standard_operation' ? (row.standard_operation || row['標準運行'] || '') :
+      field === 'content_time' ? (row.content_time || row['内容・時刻'] || '') :
+      (row.note || row['備考'] || '')
+    ) : ''
+
+    if (origVal === value && draft[field] === undefined) {
+      return
+    }
+
+    setSavingRowKeys(prev => ({ ...prev, [settingName]: true }))
+    setSavedRowKeys(prev => ({ ...prev, [settingName]: false }))
+
+    try {
+      const res = await updateBasicSetting({
+        setting_name: settingName,
+        start_date: startDate,
+        end_date: endDate,
+        standard_operation: standardOperation,
+        content_time: contentTime,
+        note: note
+      })
+
+      if (res.success) {
+        setSavedRowKeys(prev => ({ ...prev, [settingName]: true }))
+        setTimeout(() => {
+          setSavedRowKeys(prev => ({ ...prev, [settingName]: false }))
+        }, 3000)
+      } else {
+        alert(`保存に失敗しました: ${res.error || res.message}`)
+      }
+    } catch (err: any) {
+      alert(`保存エラー: ${err.message || '通信に失敗しました'}`)
+    } finally {
+      setSavingRowKeys(prev => ({ ...prev, [settingName]: false }))
+    }
+  }
 
   // 1. タブ管理
   const [activeTab, setActiveTab] = useState<AdminTab>('monitoring')
@@ -362,12 +451,12 @@ export const AdminDashboard: React.FC = () => {
       })
     } else {
       setEditingHoliday(null)
-      const curYear = new Date().getFullYear()
+      const todayStr = new Date().toISOString().split('T')[0]
       setHolidayFormData({
         holiday_name: '',
-        start_date: `${curYear}-08-01`,
-        end_date: `${curYear}-08-25`,
-        holiday_type: 'summer',
+        start_date: todayStr,
+        end_date: todayStr,
+        holiday_type: 'other',
         note: '全便自動運休（臨時運行日を除く）'
       })
     }
@@ -981,7 +1070,7 @@ export const AdminDashboard: React.FC = () => {
             }`}
           >
             <Palmtree className="h-4 w-4" />
-            長期休業・学校閉庁日 ({schoolHolidays.length}件)
+            基本設定・運休期間 ({basicSettings.length > 0 ? `${basicSettings.length}件` : `${schoolHolidays.length}件`})
           </button>
 
           <button
@@ -1927,72 +2016,80 @@ export const AdminDashboard: React.FC = () => {
         )}
 
         {/* ========================================================= */}
-        {/* タブ 4: 長期休業・学校閉庁日マスタ（年度別管理 ＆ 翌年一括複製） */}
+        {/* タブ 4: 基本設定・運休期間マスタ（スプレッドシート連動） */}
         {/* ========================================================= */}
         {activeTab === 'holidays' && (
-          <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="space-y-8 animate-in fade-in duration-300">
+            {/* ヘッダーエリア */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/5 border border-white/5 rounded-3xl p-6 shadow-xl">
               <div>
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Googleスプレッドシート連動中
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">シート名: 基本設定・運休期間</span>
+                </div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2 mt-1.5">
                   <Palmtree className="h-6 w-6 text-amber-400" />
-                  自治体別・長期休業期間 ＆ 学校閉庁日設定
+                  基本設定・運休期間（長期休業＆運行ルールマスタ）
                 </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  夏季休業（夏休み）、冬季休業（冬休み）、春季休業（春休み）、学校閉庁日などを期間指定で登録・管理できます。期間中は原則として全便自動運休となります。
+                <p className="text-xs text-slate-400 mt-1 max-w-3xl">
+                  スプレッドシートの「基本設定・運休期間」シートから直接取得した長期休業日（春休み・夏休み・冬休み等）の日程および各便の運行設定です。
+                  運休期間は保護者画面のカレンダーにも自動連動されます。
                 </p>
               </div>
 
-              <div className="flex flex-wrap gap-2.5 self-start sm:self-auto">
-                <select
-                  value={selectedHolidayYearFilter}
-                  onChange={(e) => setSelectedHolidayYearFilter(e.target.value)}
-                  className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
-                >
-                  <option value="all">すべての年度</option>
-                  <option value="2025">2025年度</option>
-                  <option value="2026">2026年度</option>
-                  <option value="2027">2027年度</option>
-                </select>
-
+              <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
                 <button
                   type="button"
-                  onClick={handleCopyHolidaysToNextYear}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 font-bold rounded-xl text-xs transition-all active:scale-95"
-                  title="今年度の休業設定を翌年度へ+1年シフトして一括複製"
+                  disabled={isSyncingBasicSettings}
+                  onClick={handleRefreshBasicSettings}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-500/60 font-bold rounded-xl text-xs transition-all active:scale-95 shadow-lg shadow-amber-500/5 disabled:opacity-50"
+                  title="スプレッドシートの最新データを再取得"
                 >
-                  <Copy className="h-3.5 w-3.5" />
-                  翌年度へ一括引き継ぎ
-                </button>
-
-                <button
-                  onClick={() => handleOpenHolidayModal()}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20 active:scale-95 transition-all"
-                >
-                  <Plus className="h-4 w-4" />
-                  新規休業期間を追加
+                  <RefreshCw className={`h-4 w-4 ${isSyncingBasicSettings ? 'animate-spin text-amber-400' : ''}`} />
+                  {isSyncingBasicSettings ? 'データ再取得中...' : 'GASから最新データを再同期'}
                 </button>
               </div>
             </div>
 
-            {/* 長期休業カード一覧 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredHolidays.map(holiday => {
-                const isSummer = holiday.holiday_type === 'summer'
-                const isWinter = holiday.holiday_type === 'winter'
-                const isSpring = holiday.holiday_type === 'spring'
+            {/* ① 長期休業期間（春休み・夏休み・冬休み等）の要約ハイライトカード */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-black text-white flex items-center gap-2">
+                  <Sun className="h-4 w-4 text-amber-400" />
+                  長期休業・運休期間ハイライト（カレンダー自動運休対象）
+                </h3>
+                <span className="text-xs text-slate-400 font-bold">
+                  {basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).length} 件
+                </span>
+              </div>
 
-                return (
-                  <div
-                    key={holiday.id}
-                    className="bg-slate-900/60 border border-slate-850 rounded-3xl p-6 space-y-4 hover:border-slate-750 transition-all flex flex-col justify-between"
-                  >
-                    <div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).map((period: BasicSettingPeriodRow, idx: number) => {
+                  const name = period.setting_name || period['設定名'] || '休業期間'
+                  const startDate = period.start_date || period['開始日'] || '-'
+                  const endDate = period.end_date || period['終了日'] || '-'
+                  const stdOp = period.standard_operation || period['標準運行'] || '運休'
+                  const contentTime = period.content_time || period['内容・時刻'] || '全便運休'
+                  const note = period.note || period['備考'] || ''
+
+                  const isSpring = name.includes('春')
+                  const isSummer = name.includes('夏')
+                  const isWinter = name.includes('冬')
+
+                  return (
+                    <div
+                      key={`period-card-${idx}`}
+                      className="bg-slate-900/70 border border-slate-800 rounded-3xl p-5 space-y-3 hover:border-slate-700 transition-all shadow-lg relative overflow-hidden"
+                    >
                       <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-2">
-                          <div className={`p-2 rounded-xl ${
-                            isSummer ? 'bg-amber-500/20 text-amber-300' :
-                            isWinter ? 'bg-sky-500/20 text-sky-300' :
-                            isSpring ? 'bg-emerald-500/20 text-emerald-300' :
+                        <div className="flex items-center gap-2.5">
+                          <div className={`p-2.5 rounded-2xl ${
+                            isSummer ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/30' :
+                            isWinter ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/30' :
+                            isSpring ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/30' :
                             'bg-slate-800 text-slate-300'
                           }`}>
                             {isSummer ? <Sun className="h-5 w-5" /> :
@@ -2001,53 +2098,336 @@ export const AdminDashboard: React.FC = () => {
                              <Ban className="h-5 w-5" />}
                           </div>
                           <div>
-                            <span className="text-[10px] text-slate-500 uppercase tracking-wider block">長期休業設定</span>
-                            <h3 className="text-base font-black text-white">{holiday.holiday_name}</h3>
+                            <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">長期休業日</span>
+                            <h4 className="text-base font-black text-white">{name}</h4>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenHolidayModal(holiday)}
-                            className="p-2 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-xl transition-all"
-                            title="編集"
-                          >
-                            <Edit2 className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              handleDeleteHoliday(holiday)
-                            }}
-                            className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 rounded-xl transition-all"
-                            title="削除"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                          {stdOp}
+                        </span>
                       </div>
 
-                      <div className="mt-4 bg-slate-950/60 p-3.5 rounded-2xl border border-slate-900 text-xs space-y-1.5">
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">期間:</span>
-                          <span className="font-mono font-bold text-amber-300">{holiday.start_date} 〜 {holiday.end_date}</span>
+                      <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-900 text-xs space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 text-[11px]">日程:</span>
+                          <span className="font-mono font-bold text-amber-300 tracking-wide text-xs">
+                            {startDate} 〜 {endDate}
+                          </span>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-500">運行基本設定:</span>
-                          <span className="font-bold text-rose-400">全便自動運休</span>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-500 text-[11px]">内容・時刻:</span>
+                          <span className="font-bold text-slate-200 text-xs">{contentTime}</span>
                         </div>
-                        {holiday.note && (
-                          <div className="pt-1 text-[11px] text-slate-400 border-t border-slate-900">
-                            {holiday.note}
+                        {note && (
+                          <div className="pt-1.5 text-[11px] text-slate-400 border-t border-slate-900/80">
+                            備考: {note}
                           </div>
                         )}
                       </div>
+
+                      <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold pt-1">
+                        <Check className="h-3.5 w-3.5" />
+                        カレンダー自動運休連動中
+                      </div>
                     </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* ② スプレッドシート完全一致一覧テーブル */}
+            <div className="bg-slate-900/60 border border-slate-850 rounded-3xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-black text-white flex items-center gap-2">
+                      <FileSpreadsheet className="h-5 w-5 text-emerald-400" />
+                      スプレッドシート「基本設定・運休期間」インライン編集（即時自動保存）
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      管理者限定・全5項目自動同期
+                    </span>
                   </div>
-                )
-              })}
+                  <p className="text-xs text-slate-400 mt-1">
+                    開始日・終了日（日付選択時）、標準運行（選択時）、内容・備考（入力離脱時）にスプレッドシートへ即時自動同期（パターンA）されます。
+                  </p>
+                </div>
+                <div className="flex items-center gap-3 self-start sm:self-auto">
+                  <div className="text-xs text-slate-400 font-mono">
+                    全 {basicSettings.length} 行
+                  </div>
+                </div>
+              </div>
+
+              {basicSettings.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <div className="p-3 rounded-full bg-amber-500/10 text-amber-400 w-12 h-12 mx-auto flex items-center justify-center">
+                    <RefreshCw className="h-6 w-6 animate-spin" />
+                  </div>
+                  <p className="text-sm font-bold text-slate-300">スプレッドシートからデータを取得中...</p>
+                  <p className="text-xs text-slate-500">初回読み込みに数秒かかる場合があります。</p>
+                  <button
+                    type="button"
+                    onClick={handleRefreshBasicSettings}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl border border-slate-700 transition-all"
+                  >
+                    再読み込みを実行
+                  </button>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-slate-800">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 font-bold uppercase tracking-wider text-[11px]">
+                      <tr>
+                        <th className="py-3 px-3 w-10 text-center text-slate-600">#</th>
+                        <th className="py-3 px-3 min-w-[130px]">設定名 (A列)</th>
+                        <th className="py-3 px-3 min-w-[145px]">開始日 (B列)</th>
+                        <th className="py-3 px-3 min-w-[145px]">終了日 (C列)</th>
+                        <th className="py-3 px-3 min-w-[115px]">標準運行 (D列)</th>
+                        <th className="py-3 px-3 min-w-[160px]">内容・時刻 (E列)</th>
+                        <th className="py-3 px-3 min-w-[160px]">備考 (F列)</th>
+                        <th className="py-3 px-3 w-24 text-center">保存状態</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-medium">
+                      {basicSettings.map((row, idx) => {
+                        const settingName = row.setting_name || row['設定名'] || ''
+                        const rawStart = row.start_date || row['開始日'] || ''
+                        const rawEnd = row.end_date || row['終了日'] || ''
+                        const rawStdOp = row.standard_operation || row['標準運行'] || ''
+                        const rawContentTime = row.content_time || row['内容・時刻'] || ''
+                        const rawNote = row.note || row['備考'] || ''
+
+                        const draft = basicSettingDrafts[settingName] || {}
+                        const curStart = draft.start_date !== undefined ? draft.start_date : rawStart
+                        const curEnd = draft.end_date !== undefined ? draft.end_date : rawEnd
+                        const curStdOp = draft.standard_operation !== undefined ? draft.standard_operation : rawStdOp
+                        const curContentTime = draft.content_time !== undefined ? draft.content_time : rawContentTime
+                        const curNote = draft.note !== undefined ? draft.note : rawNote
+
+                        const isSaving = Boolean(savingRowKeys[settingName])
+                        const isSaved = Boolean(savedRowKeys[settingName])
+
+                        const isHolidayRow = (rawStart && rawEnd) || settingName.includes('休み')
+
+                        // HTML5 input[type=date]用フォーマット（YYYY-MM-DD）
+                        const startForInput = curStart ? curStart.replace(/\//g, '-') : ''
+                        const endForInput = curEnd ? curEnd.replace(/\//g, '-') : ''
+
+                        return (
+                          <tr 
+                            key={`basic-row-${idx}`}
+                            className={`hover:bg-slate-800/40 transition-colors ${
+                              isHolidayRow ? 'bg-amber-500/[0.03]' : ''
+                            }`}
+                          >
+                            <td className="py-3 px-3 text-center font-mono text-slate-500 text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-3 px-3 font-bold text-white">
+                              <div className="flex items-center gap-2">
+                                {settingName.includes('春') ? <Palmtree className="h-4 w-4 text-emerald-400 shrink-0" /> :
+                                 settingName.includes('夏') ? <Sun className="h-4 w-4 text-amber-400 shrink-0" /> :
+                                 settingName.includes('冬') ? <Snowflake className="h-4 w-4 text-sky-400 shrink-0" /> :
+                                 settingName.includes('便') ? <Bus className="h-4 w-4 text-indigo-400 shrink-0" /> :
+                                 settingName.includes('祝') || settingName.includes('土日') ? <CalendarIcon className="h-4 w-4 text-rose-400 shrink-0" /> :
+                                 <Clock className="h-4 w-4 text-slate-400 shrink-0" />}
+                                <span className="text-xs font-bold">{settingName}</span>
+                              </div>
+                            </td>
+
+                            {/* 開始日 (B列: 日付ピッカー) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="date"
+                                value={startForInput}
+                                onChange={(e) => {
+                                  const slashVal = e.target.value ? e.target.value.replace(/-/g, '/') : ''
+                                  handleBasicSettingDraftChange(settingName, 'start_date', slashVal)
+                                  handleAutoSaveBasicSetting(settingName, 'start_date', slashVal)
+                                }}
+                                className="w-full bg-slate-950 border border-slate-750 hover:border-amber-500/60 focus:border-amber-500 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono focus:outline-none transition-all cursor-pointer shadow-inner"
+                                title="開始日を選択（変更確定時に自動保存）"
+                              />
+                            </td>
+
+                            {/* 終了日 (C列: 日付ピッカー) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="date"
+                                value={endForInput}
+                                onChange={(e) => {
+                                  const slashVal = e.target.value ? e.target.value.replace(/-/g, '/') : ''
+                                  handleBasicSettingDraftChange(settingName, 'end_date', slashVal)
+                                  handleAutoSaveBasicSetting(settingName, 'end_date', slashVal)
+                                }}
+                                className="w-full bg-slate-950 border border-slate-750 hover:border-amber-500/60 focus:border-amber-500 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono focus:outline-none transition-all cursor-pointer shadow-inner"
+                                title="終了日を選択（変更確定時に自動保存）"
+                              />
+                            </td>
+
+                            {/* 標準運行 (D列: プルダウン) */}
+                            <td className="py-3 px-3">
+                              <select
+                                value={curStdOp}
+                                onChange={(e) => {
+                                  const val = e.target.value
+                                  handleBasicSettingDraftChange(settingName, 'standard_operation', val)
+                                  handleAutoSaveBasicSetting(settingName, 'standard_operation', val)
+                                }}
+                                className={`w-full font-bold text-xs rounded-xl px-2.5 py-1.5 border focus:outline-none transition-all cursor-pointer shadow-inner ${
+                                  curStdOp === '運休'
+                                    ? 'bg-rose-950/40 text-rose-300 border-rose-500/40 focus:border-rose-500'
+                                    : curStdOp === '運行あり'
+                                      ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40 focus:border-emerald-500'
+                                      : curStdOp === '運行なし'
+                                        ? 'bg-slate-900 text-slate-400 border-slate-750 focus:border-slate-500'
+                                        : 'bg-slate-950 text-slate-200 border-slate-750 focus:border-indigo-500'
+                                }`}
+                                title="標準運行を選択（変更時に即時自動保存）"
+                              >
+                                <option value="" className="bg-slate-900 text-slate-400">未設定</option>
+                                <option value="運休" className="bg-slate-900 text-rose-300 font-bold">運休</option>
+                                <option value="運行あり" className="bg-slate-900 text-emerald-300 font-bold">運行あり</option>
+                                <option value="運行なし" className="bg-slate-900 text-slate-400 font-bold">運行なし</option>
+                                {curStdOp && !['運休', '運行あり', '運行なし', ''].includes(curStdOp) && (
+                                  <option value={curStdOp} className="bg-slate-900 text-white font-bold">{curStdOp}</option>
+                                )}
+                              </select>
+                            </td>
+
+                            {/* 内容・時刻 (E列: テキスト入力 onBlur) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="text"
+                                value={curContentTime}
+                                placeholder="内容・時刻..."
+                                onChange={(e) => handleBasicSettingDraftChange(settingName, 'content_time', e.target.value)}
+                                onBlur={(e) => handleAutoSaveBasicSetting(settingName, 'content_time', e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-xl px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none transition-all shadow-inner"
+                                title="内容・時刻を入力（フォーカス離脱時に自動保存）"
+                              />
+                            </td>
+
+                            {/* 備考 (F列: テキスト入力 onBlur) */}
+                            <td className="py-3 px-3">
+                              <input
+                                type="text"
+                                value={curNote}
+                                placeholder="備考..."
+                                onChange={(e) => handleBasicSettingDraftChange(settingName, 'note', e.target.value)}
+                                onBlur={(e) => handleAutoSaveBasicSetting(settingName, 'note', e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                                className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-xl px-2.5 py-1.5 text-slate-300 text-xs focus:outline-none transition-all shadow-inner"
+                                title="備考を入力（フォーカス離脱時に自動保存）"
+                              />
+                            </td>
+
+                            {/* 保存状態インジケーター */}
+                            <td className="py-3 px-3 text-center whitespace-nowrap">
+                              {isSaving ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 animate-pulse bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
+                                  <RefreshCw className="h-3 w-3 animate-spin" />
+                                  保存中...
+                                </span>
+                              ) : isSaved ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-300 bg-emerald-500/15 px-2.5 py-1 rounded-full border border-emerald-500/30 animate-in fade-in duration-200">
+                                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                  ✓ 保存済
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-600 font-mono select-none">
+                                  自動同期
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* ③ アプリ独自休業期間の追加・補足設定（任意管理エリア） */}
+            <div className="bg-slate-900/40 border border-slate-850 rounded-3xl p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-black text-slate-300 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-indigo-400" />
+                    アプリ独自休業・学校閉庁日設定（任意追加登録）
+                  </h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    スプレッドシートとは別に、アプリ上で個別の臨時休業や学校閉庁日を追加登録したい場合に利用できます。
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    value={selectedHolidayYearFilter}
+                    onChange={(e) => setSelectedHolidayYearFilter(e.target.value)}
+                    className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300 font-bold focus:outline-none"
+                  >
+                    <option value="all">すべての年度</option>
+                    <option value="2025">2025年度</option>
+                    <option value="2026">2026年度</option>
+                    <option value="2027">2027年度</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyHolidaysToNextYear}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 font-bold rounded-xl text-xs transition-all"
+                  >
+                    <Copy className="h-3 w-3" />
+                    翌年度へ複製
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenHolidayModal()}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all active:scale-95"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    個別休業を追加
+                  </button>
+                </div>
+              </div>
+
+              {filteredHolidays.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                  {filteredHolidays.map(holiday => (
+                    <div
+                      key={holiday.id}
+                      className="bg-slate-950/60 border border-slate-850 rounded-2xl p-4 flex justify-between items-center text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-white">{holiday.holiday_name}</div>
+                        <div className="text-[11px] font-mono text-amber-300/90">{holiday.start_date} 〜 {holiday.end_date}</div>
+                        {holiday.note && <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{holiday.note}</div>}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenHolidayModal(holiday)}
+                          className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-all"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteHoliday(holiday)}
+                          className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 rounded-lg transition-all"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

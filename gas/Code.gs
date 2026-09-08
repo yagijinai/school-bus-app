@@ -95,6 +95,8 @@ function handleRequest(params, method) {
         return createJsonResponse(getBusStopsFromSheet());
       case 'getBasicSettings':
         return createJsonResponse(getBasicSettingsFromSheet());
+      case 'saveBasicSetting':
+        return createJsonResponse(saveBasicSettingToSheet(params));
       case 'getSchoolTimetable':
         return createJsonResponse(getSchoolTimetableFromSheet());
       case 'getUserPermissions':
@@ -735,3 +737,69 @@ function getAllMasterFromSheet() {
     'ユーザー権限マスタ': userPermissionsRes.data || []
   };
 }
+
+/**
+ * 13. 基本設定・運休期間の保存・更新（管理者限定）
+ * A列（設定名）をキーに検索し、B〜F列（開始日、終了日、標準運行、内容・時刻、備考）を上書き更新
+ */
+function saveBasicSettingToSheet(params) {
+  const settingName = String(params.setting_name || params.settingName || params['設定名'] || '').trim();
+  if (!settingName) {
+    return { status: 'error', message: '設定名（A列）が指定されていません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('基本設定・運休期間');
+  if (!sheet) {
+    sheet = ss.insertSheet('基本設定・運休期間');
+    sheet.appendRow(['設定名', '開始日', '終了日', '標準運行', '内容・時刻', '備考']);
+  }
+
+  const startDate = formatDateToSlash(params.start_date || params.startDate || params['開始日'] || '');
+  const endDate = formatDateToSlash(params.end_date || params.endDate || params['終了日'] || '');
+  const standardOperation = String(params.standard_operation || params.standardOperation || params['標準運行'] || '').trim();
+  const contentTime = String(params.content_time || params.contentTime || params['内容・時刻'] || '').trim();
+  const note = String(params.note || params['備考'] || '').trim();
+
+  const lastRow = sheet.getLastRow();
+  let targetRow = -1;
+
+  if (lastRow >= 2) {
+    const names = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < names.length; i++) {
+      if (String(names[i][0]).trim() === settingName) {
+        targetRow = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (targetRow > 0) {
+    // B列〜F列（列2〜6）の5項目を上書き更新
+    sheet.getRange(targetRow, 2, 1, 5).setValues([[
+      startDate,
+      endDate,
+      standardOperation,
+      contentTime,
+      note
+    ]]);
+    return {
+      status: 'success',
+      message: '基本設定を更新しました',
+      action: 'updated',
+      row: targetRow,
+      setting_name: settingName
+    };
+  } else {
+    // 存在しない場合は新規追加
+    sheet.appendRow([settingName, startDate, endDate, standardOperation, contentTime, note]);
+    return {
+      status: 'success',
+      message: '基本設定を新規追加しました',
+      action: 'inserted',
+      row: sheet.getLastRow(),
+      setting_name: settingName
+    };
+  }
+}
+

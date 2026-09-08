@@ -12,7 +12,8 @@ import type {
   MonthlyTripSchedule, 
   SpecialTripSchedule, 
   SchoolHoliday,
-  GuardianMasterRow
+  GuardianMasterRow,
+  BasicSettingPeriodRow
 } from '../types/app'
 import type { User } from '@supabase/supabase-js'
 import { mockBusOperations, mockBusRoutes, mockBusStops, mockMonthlyTripSchedules, mockSpecialTripSchedules, mockSchoolHolidays } from '../lib/mockData'
@@ -25,7 +26,10 @@ import {
   fetchBusStopsFromGAS,
   fetchSchedulesFromGAS,
   fetchAllMasterFromGAS,
-  verifyStudentFromGAS
+  verifyStudentFromGAS,
+  fetchBasicSettingsFromGAS,
+  saveBasicSetting,
+  formatDateToSlash
 } from '../lib/api/gas'
 import { verifyRolePassword } from '../lib/authUtils'
 
@@ -72,6 +76,16 @@ interface AuthContextType {
   monthlyTripSchedules: MonthlyTripSchedule[]
   specialTripSchedules: SpecialTripSchedule[]
   schoolHolidays: SchoolHoliday[]
+  basicSettings: BasicSettingPeriodRow[]
+  refreshBasicSettings: () => Promise<void>
+  updateBasicSetting: (payload: {
+    setting_name: string
+    start_date?: string
+    end_date?: string
+    standard_operation?: string
+    content_time?: string
+    note?: string
+  }) => Promise<{ success: boolean; message?: string; error?: string }>
   getDateScheduleStatus: (dateStr: string) => DateScheduleStatus
   getTripTime: (tripName: string, dateOrMonth?: string | number, forceIsShortened?: boolean) => string
   getAdjustedStopArrivalTime: (stop: BusStop, dateOrMonth?: string | number) => string
@@ -130,7 +144,8 @@ const STORAGE_KEYS = {
   STOPS: 'school_bus_stops_v2',
   RESERVATIONS: 'school_bus_reservations_v2',
   OPERATIONS: 'school_bus_operations_v2',
-  RIDE_STATUSES: 'school_bus_ride_statuses_v2'
+  RIDE_STATUSES: 'school_bus_ride_statuses_v2',
+  BASIC_SETTINGS: 'school_bus_basic_settings_v2'
 }
 
 const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
@@ -212,6 +227,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [monthlyTripSchedules, setMonthlyTripSchedules] = useState<MonthlyTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.MONTHLY_SCHEDULES, mockMonthlyTripSchedules))
   const [specialTripSchedules, setSpecialTripSchedules] = useState<SpecialTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.SPECIAL_SCHEDULES, mockSpecialTripSchedules))
   const [schoolHolidays, setSchoolHolidays] = useState<SchoolHoliday[]>(() => loadFromStorage(STORAGE_KEYS.HOLIDAYS, mockSchoolHolidays))
+  const [basicSettings, setBasicSettings] = useState<BasicSettingPeriodRow[]>(() => loadFromStorage(STORAGE_KEYS.BASIC_SETTINGS, []))
 
   // 各ステート変更時に LocalStorage へ即時自動永続化
   useEffect(() => { saveToStorage(STORAGE_KEYS.STUDENTS, students) }, [students])
@@ -223,6 +239,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => { saveToStorage(STORAGE_KEYS.RESERVATIONS, reservations) }, [reservations])
   useEffect(() => { saveToStorage(STORAGE_KEYS.OPERATIONS, busOperations) }, [busOperations])
   useEffect(() => { saveToStorage(STORAGE_KEYS.RIDE_STATUSES, rideStatuses) }, [rideStatuses])
+  useEffect(() => { saveToStorage(STORAGE_KEYS.BASIC_SETTINGS, basicSettings) }, [basicSettings])
 
   // 保護者データの同期（GAS action: "getGuardianData" を送信）
   const syncGuardianData = useCallback(async (email: string) => {
@@ -371,6 +388,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fetchBusStopsFromGAS().then(stops => {
       if (!isCancelled && stops && stops.length > 0) setBusStops(stops)
     }).catch(err => console.warn('GAS BusStops fetch warning:', err))
+
+    // 1-2. GASから基本設定・運休期間をフェッチ
+    fetchBasicSettingsFromGAS().then(settings => {
+      if (!isCancelled && settings && settings.length > 0) {
+        console.log('[AuthContext] 🎯 basicSettings取得完了:', settings.length, '件')
+        setBasicSettings(settings)
+        syncHolidaysFromBasicSettings(settings)
+      }
+    }).catch(err => console.warn('GAS BasicSettings fetch warning:', err))
+
 
     // OAuthリダイレクト状態（#access_token）の同期判定
     const isOAuthRedirect = typeof window !== 'undefined' && (
@@ -596,11 +623,166 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [syncGuardianData])
 
+  // 基本設定からschoolHolidaysへ休業日を完全同期（ハードコード排除・スプレッドシートデータ優先）
+  const syncHolidaysFromBasicSettings = (settings: BasicSettingPeriodRow[]) => {
+    if (!settings || settings.length === 0) return
+    setSchoolHolidays(prev => {
+      let updated = [...prev]
+      for (const row of settings) {
+        const name = String(row.setting_name || row['設定名'] || '').trim()
+        const rawStart = String(row.start_date || row['開始日'] || '').trim()
+        const rawEnd = String(row.end_date || row['終了日'] || '').trim()
+        const note = String(row.note || row['備考'] || '').trim()
+        if (!name || (!rawStart && !rawEnd)) continue
+
+        const startHyphen = rawStart ? rawStart.replace(/\//g, '-') : ''
+        const endHyphen = rawEnd ? rawEnd.replace(/\//g, '-') : ''
+
+        let found = false
+        updated = updated.map(h => {
+          const isMatch = 
+            (name.includes('冬') && h.holiday_name.includes('冬')) ||
+            (name.includes('夏') && h.holiday_name.includes('夏')) ||
+            (name.includes('春') && h.holiday_name.includes('春')) ||
+            h.holiday_name.includes(name)
+          if (isMatch) {
+            found = true
+            return {
+              ...h,
+              start_date: startHyphen || h.start_date,
+              end_date: endHyphen || h.end_date,
+              note: note || h.note
+            }
+          }
+          return h
+        })
+
+        if (!found && (startHyphen || endHyphen)) {
+          const holidayType = name.includes('春') ? 'spring' : name.includes('夏') ? 'summer' : name.includes('冬') ? 'winter' : 'other'
+          updated.push({
+            id: `sh-auto-${Math.random().toString(36).substr(2, 7)}`,
+            holiday_name: name,
+            start_date: startHyphen,
+            end_date: endHyphen,
+            holiday_type: holidayType,
+            note: note || 'スプレッドシート連動',
+            created_at: new Date().toISOString()
+          })
+        }
+      }
+      return updated
+    })
+  }
+
+  // 基本設定・運休期間の単独リフレッシュ
+  const refreshBasicSettings = async () => {
+    try {
+      const settings = await fetchBasicSettingsFromGAS()
+      if (settings && settings.length > 0) {
+        setBasicSettings(settings)
+        syncHolidaysFromBasicSettings(settings)
+        console.log('[AuthContext] 🔄 基本設定・運休期間リフレッシュ完了:', settings.length, '件')
+      }
+    } catch (err) {
+      console.warn('refreshBasicSettings warning:', err)
+    }
+  }
+
+  // 基本設定・運休期間の保存・更新（管理者限定・パターンA即時自動保存）
+  const updateBasicSetting = async (payload: {
+    setting_name: string
+    start_date?: string
+    end_date?: string
+    standard_operation?: string
+    content_time?: string
+    note?: string
+  }): Promise<{ success: boolean; message?: string; error?: string }> => {
+    const settingName = String(payload.setting_name || '').trim()
+    const startDate = payload.start_date ? formatDateToSlash(payload.start_date) : ''
+    const endDate = payload.end_date ? formatDateToSlash(payload.end_date) : ''
+    const stdOp = payload.standard_operation !== undefined ? String(payload.standard_operation).trim() : ''
+    const contentTime = payload.content_time !== undefined ? String(payload.content_time).trim() : ''
+    const note = payload.note !== undefined ? String(payload.note).trim() : ''
+
+    // 1. 内部ステート basicSettings を即時更新（楽観的UI更新）
+    const updatedRow: BasicSettingPeriodRow = {
+      setting_name: settingName,
+      start_date: startDate,
+      end_date: endDate,
+      standard_operation: stdOp,
+      content_time: contentTime,
+      note: note,
+      '設定名': settingName,
+      '開始日': startDate,
+      '終了日': endDate,
+      '標準運行': stdOp,
+      '内容・時刻': contentTime,
+      '備考': note
+    }
+
+    setBasicSettings(prev => {
+      const idx = prev.findIndex(item => {
+        const n = item.setting_name || item['設定名'] || ''
+        return n.trim() === settingName
+      })
+      if (idx >= 0) {
+        const copy = [...prev]
+        copy[idx] = { ...copy[idx], ...updatedRow }
+        return copy
+      } else {
+        return [...prev, updatedRow]
+      }
+    })
+
+    // 2. schoolHolidays も連動即時更新
+    const startHyphen = startDate ? startDate.replace(/\//g, '-') : ''
+    const endHyphen = endDate ? endDate.replace(/\//g, '-') : ''
+    setSchoolHolidays(prev => {
+      return prev.map(h => {
+        const isMatch = 
+          (settingName.includes('冬') && h.holiday_name.includes('冬')) ||
+          (settingName.includes('夏') && h.holiday_name.includes('夏')) ||
+          (settingName.includes('春') && h.holiday_name.includes('春')) ||
+          h.holiday_name.includes(settingName)
+        if (isMatch) {
+          return {
+            ...h,
+            start_date: startHyphen || h.start_date,
+            end_date: endHyphen || h.end_date,
+            note: note || h.note
+          }
+        }
+        return h
+      })
+    })
+
+    // 3. GAS API を呼び出してスプレッドシートへ自動同期
+    try {
+      const res = await saveBasicSetting({
+        setting_name: settingName,
+        start_date: startDate,
+        end_date: endDate,
+        standard_operation: stdOp,
+        content_time: contentTime,
+        note: note
+      })
+      return res
+    } catch (err: any) {
+      console.error('[AuthContext updateBasicSetting] ❌ GAS通信エラー:', err)
+      return { success: false, error: err.message || '通信エラー' }
+    }
+  }
+
   // 手動リフレッシュ
   const refreshData = async () => {
     try {
       const stops = await fetchBusStopsFromGAS()
       if (stops && stops.length > 0) setBusStops(stops)
+
+      const settings = await fetchBasicSettingsFromGAS()
+      if (settings && settings.length > 0) {
+        setBasicSettings(settings)
+      }
 
       if (user?.email && profile?.role === 'parent') {
         await syncGuardianData(user.email)
@@ -1262,6 +1444,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     }
 
+    // スプレッドシート「基本設定・運休期間」シートからの運休期間判定
+    if (basicSettings && basicSettings.length > 0) {
+      for (const setting of basicSettings) {
+        const isSuspended = 
+          setting.standard_operation === '運休' || 
+          setting['標準運行'] === '運休' ||
+          (setting.content_time && setting.content_time.includes('運休')) ||
+          (setting['内容・時刻'] && setting['内容・時刻'].includes('運休'))
+
+        const rawStart = (setting.start_date || setting['開始日'] || '').trim()
+        const rawEnd = (setting.end_date || setting['終了日'] || '').trim()
+        if (!isSuspended || !rawStart || !rawEnd) continue
+
+        const startSlash = rawStart.replace(/-/g, '/')
+        const endSlash = rawEnd.replace(/-/g, '/')
+        const curSlash = formattedDate.replace(/-/g, '/')
+
+        let inRange = false
+        if (startSlash <= endSlash) {
+          inRange = curSlash >= startSlash && curSlash <= endSlash
+        } else {
+          // 年跨ぎ（冬休み等: 例 2026/12/25 〜 2026/01/06）
+          const startParts = startSlash.split('/')
+          const endParts = endSlash.split('/')
+          const curParts = curSlash.split('/')
+          if (startParts.length === 3 && endParts.length === 3 && curParts.length === 3) {
+            const curMD = curParts[1] + '/' + curParts[2]
+            const startMD = startParts[1] + '/' + startParts[2]
+            const endMD = endParts[1] + '/' + endParts[2]
+            inRange = curMD >= startMD || curMD <= endMD
+          }
+        }
+
+        if (inRange) {
+          const settingName = setting.setting_name || setting['設定名'] || '運休期間'
+          const content = setting.content_time || setting['内容・時刻'] || '運休'
+          return {
+            date: formattedDate,
+            type: 'school_break',
+            label: `${settingName} (${content})`,
+            isSuspended: true,
+            isMorningSuspended: true,
+            isAfternoonSuspended: true,
+            holidayName: settingName,
+            note: setting.note || setting['備考'] || undefined
+          }
+        }
+      }
+    }
+
     const schoolBreak = schoolHolidays.find(h => h.start_date <= formattedDate && formattedDate <= h.end_date)
     if (schoolBreak) {
       return {
@@ -1507,6 +1739,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         monthlyTripSchedules,
         specialTripSchedules,
         schoolHolidays,
+        basicSettings,
+        refreshBasicSettings,
+        updateBasicSetting,
         getDateScheduleStatus,
         getTripTime,
         getAdjustedStopArrivalTime,
