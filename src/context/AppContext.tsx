@@ -60,6 +60,7 @@ interface AppContextType {
   registerNewStudentWithCode: (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }>
   linkStudentWithCode: (payload: { email: string; code: string }) => Promise<{ success: boolean; message?: string; student_name?: string }>
   deleteGuardianMaster: (payload: { parent_email?: string; auth_code?: string; student_name?: string }) => Promise<{ success: boolean; status?: string; message?: string; [key: string]: any }>
+  switchRole: (targetRole: '管理者' | '運転手' | '保護者') => Promise<void>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -187,6 +188,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = () => {
     setUser(null)
+  }
+
+  // 検証用：立場（ロール）の即時切り替え
+  const switchRole = async (targetRole: '管理者' | '運転手' | '保護者') => {
+    if (targetRole === '管理者') {
+      const match = data.userPermissions.find(p => p.role === '管理者')
+      setUser({
+        email: match?.email || 'admin@school.ed.jp',
+        name: match?.name || '管理者様',
+        role: '管理者'
+      })
+    } else if (targetRole === '運転手') {
+      const match = data.userPermissions.find(p => p.role === '運転手')
+      setUser({
+        email: match?.email || 'driver@school.ed.jp',
+        name: match?.name || '運転手様',
+        role: '運転手'
+      })
+    } else {
+      const match = data.guardianMaster.find(g => g.parent_email)
+      const studentName = match?.student_names[0] || '佐藤 太郎'
+      setUser({
+        email: match?.parent_email || 'yagijinai@gmail.com',
+        name: `${studentName}の保護者`,
+        role: '保護者'
+      })
+    }
   }
 
   // 運行予約の保存
@@ -569,7 +597,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteBusStop: handleDeleteBusStop,
         registerNewStudentWithCode: handleRegisterNewStudentWithCode,
         linkStudentWithCode: handleLinkStudentWithCode,
-        deleteGuardianMaster: handleDeleteGuardianMaster
+        deleteGuardianMaster: handleDeleteGuardianMaster,
+        switchRole
       }}
     >
       {children}

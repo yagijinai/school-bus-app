@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import type { BasicSettingRow, GuardianMasterRow, SchoolTimetableRow, BusStopRow } from '../types/spreadsheet'
 import { toSlashDate, toHyphenDate, formatTimeToHHmm } from '../lib/spreadsheetApi'
+import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -737,6 +738,7 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-end sm:self-auto">
+          <RoleSwitcher />
           <button
             type="button"
             onClick={() => refreshAll()}

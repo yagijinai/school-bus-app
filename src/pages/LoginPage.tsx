@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useApp } from '../context/AppContext'
-import { Bus, ArrowRight, RefreshCw, AlertCircle, KeyRound, CheckCircle2, ChevronLeft } from 'lucide-react'
+import { IS_DEV_SWITCHER_ENABLED } from '../config/features'
+import { Bus, ArrowRight, RefreshCw, AlertCircle, KeyRound, CheckCircle2, ChevronLeft, ShieldCheck, Users, Sparkles } from 'lucide-react'
 
 export const LoginPage: React.FC = () => {
   const { login, linkStudentWithCode, userPermissions, guardianMaster, syncing, refreshAll } = useApp()
@@ -27,6 +28,37 @@ export const LoginPage: React.FC = () => {
           // 未登録アドレスの場合、エラーではなく「お子様の登録コード入力」画面へ自動遷移
           setIsCodeMode(true)
           setError(null)
+        } else {
+          setError(res.message || 'ログインに失敗しました')
+        }
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 【検証用】ワンクリック・ロールログイン処理
+  const handleQuickLogin = async (targetRole: '管理者' | '運転手' | '保護者') => {
+    setError(null)
+    setLoading(true)
+    try {
+      let targetEmail = ''
+      if (targetRole === '管理者') {
+        const match = userPermissions.find(p => p.role === '管理者')
+        targetEmail = match?.email || 'admin@school.ed.jp'
+      } else if (targetRole === '運転手') {
+        const match = userPermissions.find(p => p.role === '運転手')
+        targetEmail = match?.email || 'driver@school.ed.jp'
+      } else {
+        const match = guardianMaster.find(g => g.parent_email)
+        targetEmail = match?.parent_email || 'yagijinai@gmail.com'
+      }
+
+      setEmail(targetEmail)
+      const res = await login(targetEmail)
+      if (!res.success) {
+        if (res.needAuthCode) {
+          setIsCodeMode(true)
         } else {
           setError(res.message || 'ログインに失敗しました')
         }
@@ -143,6 +175,97 @@ export const LoginPage: React.FC = () => {
                 </>
               )}
             </button>
+
+            {/* ① 【検証用】ワンクリックログインエリア */}
+            {IS_DEV_SWITCHER_ENABLED && (
+              <div className="pt-2">
+                <div className="p-4 bg-slate-950/90 border border-amber-500/30 rounded-2xl shadow-inner space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                      【検証用】ワンクリックログイン
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full font-bold">
+                      お試し開発モード
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    アドレスの手入力不要で、各立場の画面へ直接ログインして動作検証できます。
+                  </p>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {/* 1. 管理者としてログイン */}
+                    <button
+                      type="button"
+                      disabled={loading || syncing}
+                      onClick={() => handleQuickLogin('管理者')}
+                      className="w-full px-3.5 py-2.5 bg-indigo-950/50 hover:bg-indigo-900/60 active:scale-[0.99] border border-indigo-500/40 hover:border-indigo-400 rounded-xl text-left transition-all flex items-center justify-between group disabled:opacity-50"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-indigo-500/20 rounded-lg text-indigo-300">
+                          <ShieldCheck className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-black text-white group-hover:text-indigo-200 block">
+                            🏫 管理者としてログイン
+                          </span>
+                          <span className="text-[10px] text-indigo-300/70 font-mono block">
+                            管理者コンソール（/admin）
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-indigo-400 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+                    </button>
+
+                    {/* 2. 運転手としてログイン */}
+                    <button
+                      type="button"
+                      disabled={loading || syncing}
+                      onClick={() => handleQuickLogin('運転手')}
+                      className="w-full px-3.5 py-2.5 bg-emerald-950/50 hover:bg-emerald-900/60 active:scale-[0.99] border border-emerald-500/40 hover:border-emerald-400 rounded-xl text-left transition-all flex items-center justify-between group disabled:opacity-50"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-emerald-500/20 rounded-lg text-emerald-300">
+                          <Bus className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-black text-white group-hover:text-emerald-200 block">
+                            🚌 運転手としてログイン
+                          </span>
+                          <span className="text-[10px] text-emerald-300/70 font-mono block">
+                            点呼・運行画面（/driver）
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-emerald-400 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+                    </button>
+
+                    {/* 3. 保護者としてログイン */}
+                    <button
+                      type="button"
+                      disabled={loading || syncing}
+                      onClick={() => handleQuickLogin('保護者')}
+                      className="w-full px-3.5 py-2.5 bg-amber-950/50 hover:bg-amber-900/60 active:scale-[0.99] border border-amber-500/40 hover:border-amber-400 rounded-xl text-left transition-all flex items-center justify-between group disabled:opacity-50"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 bg-amber-500/20 rounded-lg text-amber-300">
+                          <Users className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-black text-white group-hover:text-amber-200 block">
+                            👨‍👩‍👧 保護者としてログイン
+                          </span>
+                          <span className="text-[10px] text-amber-300/70 font-mono block">
+                            カレンダー予約画面（/parent）
+                          </span>
+                        </div>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-amber-400 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="pt-2 text-center">
               <button

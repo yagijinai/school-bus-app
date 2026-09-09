@@ -6,6 +6,7 @@ import {
   Plus, UserPlus, AlertCircle, X, Calendar, CalendarDays, Sparkles, Check
 } from 'lucide-react'
 import { toSlashDate, toHyphenDate, formatTimeToHHmm } from '../lib/spreadsheetApi'
+import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const ParentDashboard: React.FC = () => {
   const { 
@@ -403,6 +404,7 @@ export const ParentDashboard: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 self-end sm:self-auto">
+          <RoleSwitcher />
           <button
             type="button"
             onClick={() => refreshAll()}

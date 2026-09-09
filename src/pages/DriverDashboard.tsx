@@ -14,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react'
+import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const DriverDashboard: React.FC = () => {
   const {
@@ -202,6 +203,7 @@ export const DriverDashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-2">
+            <RoleSwitcher />
             <button
               onClick={() => refreshAll()}
               disabled={syncing}
