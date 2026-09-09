@@ -225,12 +225,14 @@ function saveReservationToSheet(data) {
 
   // B列: 日付 (YYYY/MM/DD)
   const dateStr = formatDateToSlash(data.date || data['日付'] || data.rawDate);
-  const studentName = String(data.studentName || data['生徒名'] || data.studentId || '').trim();
+  const studentName = String(data.student_name || data.studentName || data['生徒名'] || data.studentId || '').trim();
 
   // D列: 登校ステータス ('乗る' または '')
   // 初期値保証: 未指定やユーザー無操作時でも初期値「乗る」を確実に反映
   let isMorning = true;
-  if (data.morningTrip !== undefined && data.morningTrip !== null) {
+  if (data.morning_status !== undefined && data.morning_status !== null) {
+    isMorning = (data.morning_status === '乗る' || data.morning_status === '乗車' || data.morning_status === true || data.morning_status === 'true');
+  } else if (data.morningTrip !== undefined && data.morningTrip !== null) {
     isMorning = (data.morningTrip === '乗る' || data.morningTrip === '乗車' || data.morningTrip === true || data.morningTrip === 'true');
   } else if (data.morningStatus !== undefined && data.morningStatus !== null) {
     isMorning = (data.morningStatus === '乗る' || data.morningStatus === '乗車' || data.morningStatus === true || data.morningStatus === 'true');

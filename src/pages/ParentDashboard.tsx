@@ -1,17 +1,17 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import { 
   Bus, 
   ChevronLeft, ChevronRight, User, RefreshCw, LogOut, CheckCircle2, Ban,
-  Plus, UserPlus, AlertCircle, X
+  Plus, UserPlus, AlertCircle, X, Calendar, CalendarDays, Sparkles, Check
 } from 'lucide-react'
-import { toSlashDate, toHyphenDate } from '../lib/spreadsheetApi'
+import { toSlashDate, toHyphenDate, formatTimeToHHmm } from '../lib/spreadsheetApi'
 
 export const ParentDashboard: React.FC = () => {
   const { 
     user, logout, guardianMaster, schedules, 
     basicSettings, schoolTimetable, busStops, 
-    saveReservation, linkStudentWithCode, syncing, refreshAll 
+    saveReservation, saveBatchSchedules, linkStudentWithCode, syncing, refreshAll 
   } = useApp()
 
   // ログイン保護者のマスターデータ（同メールの全行を取得）
@@ -36,11 +36,48 @@ export const ParentDashboard: React.FC = () => {
   // 選択中の生徒
   const [selectedStudent, setSelectedStudent] = useState<string>('')
   // 初期選択
-  React.useEffect(() => {
+  useEffect(() => {
     if (studentNames.length > 0 && (!selectedStudent || !studentNames.includes(selectedStudent))) {
       setSelectedStudent(studentNames[0])
     }
   }, [studentNames, selectedStudent])
+
+  // 一括設定コントロールバー用の入力ステート
+  const [batchMorning, setBatchMorning] = useState<'乗る' | '乗らない'>('乗る')
+  const [batchAfternoon, setBatchAfternoon] = useState<'1便' | '2便' | '乗らない'>('1便')
+
+  // 初期値の同期
+  useEffect(() => {
+    if (myGuardian) {
+      if (myGuardian.default_morning === '乗らない') {
+        setBatchMorning('乗らない')
+      } else {
+        setBatchMorning('乗る')
+      }
+
+      if (myGuardian.default_afternoon === '2便') {
+        setBatchAfternoon('2便')
+      } else if (myGuardian.default_afternoon === '乗らない') {
+        setBatchAfternoon('乗らない')
+      } else {
+        setBatchAfternoon('1便')
+      }
+    }
+  }, [myGuardian])
+
+  // 一括反映確認モーダルステート
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean
+    mode: 'week' | 'month'
+    title: string
+    startDate: string
+    endDate: string
+    targetCount: number
+    targetDates: string[]
+  } | null>(null)
+
+  const [isBatchApplying, setIsBatchApplying] = useState(false)
+  const [batchSuccessMsg, setBatchSuccessMsg] = useState<string | null>(null)
 
   // 兄弟姉妹の追加モーダル状態
   const [isAddSiblingModalOpen, setIsAddSiblingModalOpen] = useState(false)
@@ -142,9 +179,127 @@ export const ParentDashboard: React.FC = () => {
     return { isSuspended: false, name: '', note: '' }
   }
 
-  // 予約変更ハンドラ
+  // 今週分モーダルのトリガー
+  const openWeekConfirmModal = () => {
+    const validDays = weekDays
+      .map(d => d.dateStrSlash)
+      .filter(d => !checkSuspension(d).isSuspended)
+
+    if (validDays.length === 0) {
+      alert('対象週に運行予定の平日がありません（すべて運休または非平日）')
+      return
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      mode: 'week',
+      title: '今週分の予約を一括反映しますか？',
+      startDate: weekDays[0].dateStrSlash,
+      endDate: weekDays[4].dateStrSlash,
+      targetCount: validDays.length,
+      targetDates: validDays
+    })
+  }
+
+  // 今月分モーダルのトリガー
+  const openMonthConfirmModal = () => {
+    const baseDate = weekDays[0]?.dateObj || new Date()
+    const year = baseDate.getFullYear()
+    const month = baseDate.getMonth() // 0-indexed
+
+    const lastDay = new Date(year, month + 1, 0).getDate()
+    const validDays: string[] = []
+
+    for (let day = 1; day <= lastDay; day++) {
+      const d = new Date(year, month, day)
+      const dayOfWeek = d.getDay()
+      // 土日は除外 (0:日, 6:土)
+      if (dayOfWeek === 0 || dayOfWeek === 6) continue
+
+      const dateSlash = toSlashDate(d)
+      // 運休日は除外
+      if (checkSuspension(dateSlash).isSuspended) continue
+
+      validDays.push(dateSlash)
+    }
+
+    if (validDays.length === 0) {
+      alert(`${month + 1}月に運行予定の平日がありません（すべて運休または非平日）`)
+      return
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      mode: 'month',
+      title: '今月分（平日）の予約を一括反映しますか？',
+      startDate: validDays[0],
+      endDate: validDays[validDays.length - 1],
+      targetCount: validDays.length,
+      targetDates: validDays
+    })
+  }
+
+  // 一括反映の実行（GAS action: 'saveBatchSchedules' 呼び出し）
+  const handleApplyBatch = async () => {
+    if (!confirmModal || !user || !selectedStudent) return
+    setIsBatchApplying(true)
+    try {
+      const payload = confirmModal.targetDates.map(dateSlash => {
+        const timetableRow = schoolTimetable.find(t => t.date === dateSlash)
+        const t1Time = formatTimeToHHmm(timetableRow?.afternoon_trip_1) || '15:00'
+        const t2Time = formatTimeToHHmm(timetableRow?.afternoon_trip_2) || '16:00'
+
+        let aftStatus = ''
+        let trip1 = ''
+        let trip2 = ''
+        let trip3 = ''
+
+        if (batchAfternoon === '乗らない') {
+          aftStatus = '乗らない'
+        } else if (batchAfternoon === '1便') {
+          trip1 = t1Time
+        } else if (batchAfternoon === '2便') {
+          trip2 = t2Time
+        }
+
+        const existing = schedules.find(s => s.date === dateSlash && s.student_name === selectedStudent)
+
+        return {
+          date: dateSlash,
+          student_name: selectedStudent,
+          morning_status: batchMorning === '乗る' ? '乗る' : '',
+          afternoon_status: aftStatus,
+          afternoon_trip_1: trip1,
+          afternoon_trip_2: trip2,
+          afternoon_trip_3: trip3,
+          note: existing?.note || '',
+          parent_email: user.email
+        }
+      })
+
+      const res = await saveBatchSchedules(payload)
+      if (res.success || (res as any).status === 'success') {
+        setBatchSuccessMsg(`${confirmModal.mode === 'week' ? '今週分' : '今月分'}の平日（${payload.length}日分）に一括反映しました！`)
+        setTimeout(() => setBatchSuccessMsg(null), 3500)
+        setConfirmModal(null)
+      } else {
+        alert(`一括反映に失敗しました: ${res.message || 'エラーが発生しました'}`)
+      }
+    } catch (err: any) {
+      alert(`エラーが発生しました: ${err.message}`)
+    } finally {
+      setIsBatchApplying(false)
+    }
+  }
+
+  // 日別個別予約変更ハンドラ（ピンポイント変更・即時保存維持）
   const handleUpdate = async (dateSlash: string, field: 'morning' | 'afternoon', value: string) => {
     if (!user || !selectedStudent) return
+
+    const timetableRow = schoolTimetable.find(t => t.date === dateSlash)
+    const t1Time = formatTimeToHHmm(timetableRow?.afternoon_trip_1) || '15:00'
+    const t2Time = formatTimeToHHmm(timetableRow?.afternoon_trip_2) || '16:00'
+    const t3Time = formatTimeToHHmm(timetableRow?.afternoon_trip_3) || '17:00'
 
     // 既存予約行を探す
     const existing = schedules.find(s => s.date === dateSlash && s.student_name === selectedStudent)
@@ -152,8 +307,8 @@ export const ParentDashboard: React.FC = () => {
     // 現在値
     const curMorning = existing ? existing.morning_status : (myGuardian?.default_morning || '')
     const curAfternoonStatus = existing ? existing.afternoon_status : (myGuardian?.default_afternoon === '乗らない' ? '乗らない' : '')
-    const curTrip1 = existing ? existing.afternoon_trip_1 : (myGuardian?.default_afternoon === '1便' ? '1便' : '')
-    const curTrip2 = existing ? existing.afternoon_trip_2 : (myGuardian?.default_afternoon === '2便' ? '2便' : '')
+    const curTrip1 = existing ? existing.afternoon_trip_1 : (myGuardian?.default_afternoon === '1便' ? t1Time : '')
+    const curTrip2 = existing ? existing.afternoon_trip_2 : (myGuardian?.default_afternoon === '2便' ? t2Time : '')
     const curTrip3 = existing ? existing.afternoon_trip_3 : ''
 
     let newMorning = curMorning
@@ -173,19 +328,19 @@ export const ParentDashboard: React.FC = () => {
         newTrip3 = ''
       } else if (value === '1便') {
         newAfternoonStatus = ''
-        newTrip1 = '1便'
+        newTrip1 = t1Time
         newTrip2 = ''
         newTrip3 = ''
       } else if (value === '2便') {
         newAfternoonStatus = ''
         newTrip1 = ''
-        newTrip2 = '2便'
+        newTrip2 = t2Time
         newTrip3 = ''
       } else if (value === '3便') {
         newAfternoonStatus = ''
         newTrip1 = ''
         newTrip2 = ''
-        newTrip3 = '3便'
+        newTrip3 = t3Time
       } else {
         newAfternoonStatus = '乗らない'
         newTrip1 = ''
@@ -303,6 +458,130 @@ export const ParentDashboard: React.FC = () => {
         </button>
       </div>
 
+      {/* ② 一括予約反映コントロールバー */}
+      <section className="bg-slate-900/95 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-white flex items-center gap-2">
+                一括予約反映
+                <span className="text-[10px] text-slate-400 font-normal">
+                  （{selectedStudent} さんの予約）
+                </span>
+              </h2>
+              <p className="text-[11px] text-slate-400">
+                基本パターンを選択して、今週分または今月分の平日にまとめて予約を反映します
+              </p>
+            </div>
+          </div>
+          {batchSuccessMsg && (
+            <div className="px-3 py-1.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold rounded-xl flex items-center gap-1.5 animate-in fade-in">
+              <CheckCircle2 className="h-4 w-4" />
+              {batchSuccessMsg}
+            </div>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+          {/* 基本設定入力UI */}
+          <div className="lg:col-span-7 flex flex-wrap items-center gap-4">
+            {/* 登校設定 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 whitespace-nowrap">登校:</span>
+              <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setBatchMorning('乗る')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    batchMorning === '乗る'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  乗る
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchMorning('乗らない')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    batchMorning === '乗らない'
+                      ? 'bg-slate-800 text-slate-200 shadow'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  乗らない
+                </button>
+              </div>
+            </div>
+
+            {/* 下校設定 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400 whitespace-nowrap">下校:</span>
+              <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setBatchAfternoon('1便')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    batchAfternoon === '1便'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  下校1便
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchAfternoon('2便')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    batchAfternoon === '2便'
+                      ? 'bg-amber-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  下校2便
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBatchAfternoon('乗らない')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    batchAfternoon === '乗らない'
+                      ? 'bg-slate-800 text-slate-200 shadow'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  乗らない
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 反映ボタン群 */}
+          <div className="lg:col-span-5 flex items-center justify-start lg:justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={openWeekConfirmModal}
+              disabled={isBatchApplying || syncing}
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-amber-500/20 disabled:opacity-50 active:scale-95"
+            >
+              <Calendar className="h-4 w-4" />
+              今週分に反映（月〜金）
+            </button>
+            <button
+              type="button"
+              onClick={openMonthConfirmModal}
+              disabled={isBatchApplying || syncing}
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-black text-xs rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/20 disabled:opacity-50 active:scale-95"
+            >
+              <CalendarDays className="h-4 w-4" />
+              今月分に一括反映（平日）
+            </button>
+          </div>
+        </div>
+      </section>
+
       {/* 週間カレンダーコントロール */}
       <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl px-4 py-3">
         <button
@@ -333,13 +612,18 @@ export const ParentDashboard: React.FC = () => {
         </button>
       </div>
 
-      {/* 週間予約カードグリッド */}
+      {/* 週間予約カードグリッド（③ ピンポイント個別変更を維持） */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
         {weekDays.map(day => {
           const suspension = checkSuspension(day.dateStrSlash)
           const timetableRow = schoolTimetable.find(t => t.date === day.dateStrSlash)
           const existing = schedules.find(s => s.date === day.dateStrSlash && s.student_name === selectedStudent)
           
+          // 学校用時刻表からの各便時刻
+          const t1Time = formatTimeToHHmm(timetableRow?.afternoon_trip_1)
+          const t2Time = formatTimeToHHmm(timetableRow?.afternoon_trip_2)
+          const t3Time = formatTimeToHHmm(timetableRow?.afternoon_trip_3)
+
           // 登校状態（デフォルト値フォールバック）
           const morningVal = existing 
             ? (existing.morning_status === '乗る' ? '乗る' : '乗らない')
@@ -407,7 +691,7 @@ export const ParentDashboard: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-3 py-1">
-                  {/* 登校便 */}
+                  {/* 登校便（個別ピンポイント変更） */}
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-slate-400 flex items-center justify-between">
                       <span>登校便:</span>
@@ -443,7 +727,7 @@ export const ParentDashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 下校便 */}
+                  {/* ① 下校便プルダウン（フォーマット適正化 ＆ 個別ピンポイント変更） */}
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-slate-400 block">
                       下校便:
@@ -453,10 +737,20 @@ export const ParentDashboard: React.FC = () => {
                       onChange={(e) => handleUpdate(day.dateStrSlash, 'afternoon', e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2 text-xs font-bold text-white focus:border-amber-400 outline-none transition-all cursor-pointer"
                     >
-                      <option value="1便">下校 1便{timetableRow?.afternoon_trip_1 ? ` (${timetableRow.afternoon_trip_1})` : ''}</option>
-                      <option value="2便">下校 2便{timetableRow?.afternoon_trip_2 ? ` (${timetableRow.afternoon_trip_2})` : ''}</option>
-                      <option value="3便">下校 3便{timetableRow?.afternoon_trip_3 ? ` (${timetableRow.afternoon_trip_3})` : ''}</option>
-                      <option value="乗らない">乗らない（保護者送迎等）</option>
+                      <option value="乗らない">乗らない</option>
+                      <option value="1便">
+                        下校1便{t1Time ? ` (${t1Time})` : ''}
+                      </option>
+                      {t2Time && (
+                        <option value="2便">
+                          下校2便 ({t2Time})
+                        </option>
+                      )}
+                      {t3Time && (
+                        <option value="3便">
+                          下校3便 ({t3Time})
+                        </option>
+                      )}
                     </select>
                   </div>
                 </div>
@@ -483,6 +777,96 @@ export const ParentDashboard: React.FC = () => {
           )
         })}
       </div>
+
+      {/* ② 一括予約反映 確認モーダル */}
+      {confirmModal && confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-base font-black text-white flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-amber-400" />
+                {confirmModal.title}
+              </h3>
+              <button
+                type="button"
+                onClick={() => !isBatchApplying && setConfirmModal(null)}
+                disabled={isBatchApplying}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all disabled:opacity-50"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-2.5">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-500">対象のお子様:</span>
+                  <span className="font-bold text-white px-2 py-0.5 bg-slate-800 rounded-lg">
+                    {selectedStudent}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-500">反映対象期間:</span>
+                  <span className="font-mono font-bold text-amber-300">
+                    {confirmModal.startDate} 〜 {confirmModal.endDate}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span className="text-slate-500">対象日数:</span>
+                  <span className="font-bold text-white">
+                    平日 {confirmModal.targetCount} 日間
+                  </span>
+                </div>
+                <div className="pt-2 border-t border-slate-800/80 flex justify-between items-center text-slate-300">
+                  <span className="text-slate-500">反映する内容:</span>
+                  <span className="font-bold text-emerald-400">
+                    登校: {batchMorning} / 下校: {batchAfternoon === '乗らない' ? '乗らない' : `下校${batchAfternoon}`}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] leading-relaxed space-y-1">
+                <p className="font-bold flex items-center gap-1 text-amber-300">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  ご確認事項
+                </p>
+                <p>
+                  ・土日および運休期間は自動的に除外されます。<br />
+                  ・対象平日に未予約の日程は空いている行へ順番に追記され、既存予約がある日程は上書き更新されます。<br />
+                  ・反映後も、日付ごとにピンポイントで個別変更が可能です。
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                disabled={isBatchApplying}
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyBatch}
+                disabled={isBatchApplying}
+                className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-amber-500/20 disabled:opacity-50 active:scale-95"
+              >
+                {isBatchApplying ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" /> 一括反映中...
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" /> 一括反映を実行する
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* お子様追加（兄弟姉妹）モーダル */}
       {isAddSiblingModalOpen && (

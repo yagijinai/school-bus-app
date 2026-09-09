@@ -305,18 +305,84 @@ export async function saveReservationToSheet(payload: {
   note?: string
   parent_email: string
 }): Promise<{ success: boolean; message?: string }> {
+  const slashDate = toSlashDate(payload.date)
+  const cleanEmail = payload.parent_email.trim().toLowerCase()
   return sendGASPost({
     action: 'saveReservation',
-    date: toSlashDate(payload.date),
+    date: slashDate,
+    '日付': slashDate,
     student_name: payload.student_name,
+    studentName: payload.student_name,
+    '生徒名': payload.student_name,
     morning_status: payload.morning_status,
+    morningStatus: payload.morning_status,
+    '登校ステータス': payload.morning_status,
     afternoon_status: payload.afternoon_status,
+    afternoonStatus: payload.afternoon_status,
+    '下校ステータス': payload.afternoon_status,
     afternoon_trip_1: payload.afternoon_trip_1 || '',
+    '下校1便': payload.afternoon_trip_1 || '',
     afternoon_trip_2: payload.afternoon_trip_2 || '',
+    '下校2便': payload.afternoon_trip_2 || '',
     afternoon_trip_3: payload.afternoon_trip_3 || '',
+    '下校3便': payload.afternoon_trip_3 || '',
     note: payload.note || '',
-    parent_email: payload.parent_email.trim().toLowerCase(),
+    '備考': payload.note || '',
+    parent_email: cleanEmail,
+    parentEmail: cleanEmail,
+    '保護者メールアドレス': cleanEmail,
     updated_at: formatNowJ()
+  })
+}
+
+/**
+ * 2-B. 運行予定カレンダーの複数一括保存（action: "saveBatchSchedules"）
+ */
+export async function saveBatchSchedulesToSheet(schedules: Array<{
+  date: string // YYYY/MM/DD
+  student_name: string
+  morning_status: string // 「乗る」または 空白
+  afternoon_status: string // 「乗らない」または 空白
+  afternoon_trip_1?: string
+  afternoon_trip_2?: string
+  afternoon_trip_3?: string
+  note?: string
+  parent_email: string
+}>): Promise<{ success: boolean; total?: number; updatedCount?: number; insertedCount?: number; message?: string }> {
+  const formatted = schedules.map(item => {
+    const slashDate = toSlashDate(item.date)
+    const cleanEmail = item.parent_email.trim().toLowerCase()
+    return {
+      date: slashDate,
+      '日付': slashDate,
+      student_name: item.student_name,
+      studentName: item.student_name,
+      '生徒名': item.student_name,
+      morning_status: item.morning_status,
+      morningStatus: item.morning_status,
+      '登校ステータス': item.morning_status,
+      afternoon_status: item.afternoon_status,
+      afternoonStatus: item.afternoon_status,
+      '下校ステータス': item.afternoon_status,
+      afternoon_trip_1: item.afternoon_trip_1 || '',
+      '下校1便': item.afternoon_trip_1 || '',
+      afternoon_trip_2: item.afternoon_trip_2 || '',
+      '下校2便': item.afternoon_trip_2 || '',
+      afternoon_trip_3: item.afternoon_trip_3 || '',
+      '下校3便': item.afternoon_trip_3 || '',
+      note: item.note || '',
+      '備考': item.note || '',
+      parent_email: cleanEmail,
+      parentEmail: cleanEmail,
+      '保護者メールアドレス': cleanEmail,
+      updated_at: formatNowJ()
+    }
+  })
+
+  return sendGASPost({
+    action: 'saveBatchSchedules',
+    schedules: formatted,
+    reservations: formatted
   })
 }
 

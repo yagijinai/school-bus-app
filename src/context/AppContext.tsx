@@ -12,6 +12,7 @@ import type {
 import { 
   fetchSpreadsheetMaster, 
   saveReservationToSheet, 
+  saveBatchSchedulesToSheet,
   saveBasicSettingToSheet,
   saveGuardianMasterToSheet,
   saveSchoolTimetableToSheet,
@@ -19,7 +20,8 @@ import {
   deleteBusStopFromSheet,
   registerNewStudentWithCodeToSheet,
   linkStudentWithCodeToSheet,
-  deleteGuardianMasterFromSheet
+  deleteGuardianMasterFromSheet,
+  formatNowJ
 } from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
@@ -49,6 +51,7 @@ interface AppContextType {
   logout: () => void
   refreshAll: () => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveBatchSchedules: (schedules: Parameters<typeof saveBatchSchedulesToSheet>[0]) => Promise<{ success: boolean; message?: string; total?: number; updatedCount?: number; insertedCount?: number }>
   saveBasicSetting: (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveGuardianMaster: (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveSchoolTimetable: (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string }>
@@ -189,12 +192,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 運行予約の保存
   const handleSaveReservation = async (payload: Parameters<typeof saveReservationToSheet>[0]) => {
     setSyncing(true)
+    // 楽観的UI更新
+    setData(prev => {
+      const targetDate = payload.date.replace(/-/g, '/')
+      const exists = prev.schedules.some(s => s.date.replace(/-/g, '/') === targetDate && s.student_name === payload.student_name)
+      let updated: ScheduleCalendarRow[]
+      if (exists) {
+        updated = prev.schedules.map(s => {
+          if (s.date.replace(/-/g, '/') === targetDate && s.student_name === payload.student_name) {
+            return {
+              ...s,
+              morning_status: payload.morning_status,
+              afternoon_status: payload.afternoon_status,
+              afternoon_trip_1: payload.afternoon_trip_1 !== undefined ? payload.afternoon_trip_1 : s.afternoon_trip_1,
+              afternoon_trip_2: payload.afternoon_trip_2 !== undefined ? payload.afternoon_trip_2 : s.afternoon_trip_2,
+              afternoon_trip_3: payload.afternoon_trip_3 !== undefined ? payload.afternoon_trip_3 : s.afternoon_trip_3,
+              note: payload.note !== undefined ? payload.note : s.note,
+              updated_at: formatNowJ()
+            }
+          }
+          return s
+        })
+      } else {
+        updated = [
+          ...prev.schedules,
+          {
+            id: prev.schedules.length + 1,
+            date: targetDate,
+            student_name: payload.student_name,
+            morning_status: payload.morning_status,
+            afternoon_status: payload.afternoon_status,
+            afternoon_trip_1: payload.afternoon_trip_1 || '',
+            afternoon_trip_2: payload.afternoon_trip_2 || '',
+            afternoon_trip_3: payload.afternoon_trip_3 || '',
+            note: payload.note || '',
+            updated_at: formatNowJ(),
+            parent_email: payload.parent_email
+          }
+        ]
+      }
+      return { ...prev, schedules: updated }
+    })
+
     try {
       const res = await saveReservationToSheet(payload)
       if (res.success) {
         // 保存成功後にスプレッドシートから最新データを再同期
         await refreshAll()
       }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 運行予約の複数一括保存
+  const handleSaveBatchSchedules = async (payload: Parameters<typeof saveBatchSchedulesToSheet>[0]) => {
+    setSyncing(true)
+    // 楽観的UI更新: 内部ステートを即時更新
+    setData(prev => {
+      const scheduleMap = new Map<string, ScheduleCalendarRow>()
+      prev.schedules.forEach(s => {
+        scheduleMap.set(`${s.date.replace(/-/g, '/')}_${s.student_name}`, s)
+      })
+
+      payload.forEach(item => {
+        const d = item.date.replace(/-/g, '/')
+        const key = `${d}_${item.student_name}`
+        const existing = scheduleMap.get(key)
+        const updatedRow: ScheduleCalendarRow = {
+          id: existing ? existing.id : prev.schedules.length + 1,
+          date: d,
+          student_name: item.student_name,
+          morning_status: item.morning_status,
+          afternoon_status: item.afternoon_status,
+          afternoon_trip_1: item.afternoon_trip_1 || '',
+          afternoon_trip_2: item.afternoon_trip_2 || '',
+          afternoon_trip_3: item.afternoon_trip_3 || '',
+          note: item.note !== undefined ? item.note : (existing?.note || ''),
+          updated_at: formatNowJ(),
+          parent_email: item.parent_email
+        }
+        scheduleMap.set(key, updatedRow)
+      })
+
+      return {
+        ...prev,
+        schedules: Array.from(scheduleMap.values())
+      }
+    })
+
+    try {
+      const res = await saveBatchSchedulesToSheet(payload)
+      // バックグラウンドでスプレッドシートから再取得して最終整合性を同期
+      await refreshAll()
       return res
     } finally {
       setSyncing(false)
@@ -470,6 +561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         refreshAll,
         saveReservation: handleSaveReservation,
+        saveBatchSchedules: handleSaveBatchSchedules,
         saveBasicSetting: handleSaveBasicSetting,
         saveGuardianMaster: handleSaveGuardianMaster,
         saveSchoolTimetable: handleSaveSchoolTimetable,
