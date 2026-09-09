@@ -4,6 +4,7 @@ import type { Student, BusStop, SchoolHoliday, BasicSettingPeriodRow } from '../
 import { ExportAndPrintModal } from '../../components/admin/ExportAndPrintModal'
 import { SystemMaintenanceTab } from '../../components/admin/SystemMaintenanceTab'
 import { saveGuardianMaster, fetchAllMasterFromGAS } from '../../lib/api/gas'
+import { defaultBasicSettings } from '../../lib/mockData'
 import { 
   LogOut, Shield, Bus, Users, 
   Calendar as CalendarIcon, Clock, AlertCircle, CheckCircle2, 
@@ -475,6 +476,23 @@ export const AdminDashboard: React.FC = () => {
     } else {
       await addSchoolHoliday(holidayFormData)
     }
+
+    // スプレッドシート「基本設定・運休期間」（冬休み・夏休み・春休み等）と名称一致する場合、スプレッドシートへも自動同期
+    const hName = holidayFormData.holiday_name.trim()
+    const matchingBasicSetting = basicSettings.find(b => {
+      const bName = (b.setting_name || b['設定名'] || '').trim()
+      return bName && (hName === bName || hName.includes(bName) || bName.includes(hName))
+    })
+    if (matchingBasicSetting) {
+      const targetSettingName = matchingBasicSetting.setting_name || matchingBasicSetting['設定名'] || hName
+      await updateBasicSetting({
+        setting_name: targetSettingName,
+        start_date: holidayFormData.start_date,
+        end_date: holidayFormData.end_date,
+        note: holidayFormData.note
+      })
+    }
+
     setIsHolidayModalOpen(false)
   }
 
@@ -2059,80 +2077,149 @@ export const AdminDashboard: React.FC = () => {
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-black text-white flex items-center gap-2">
                   <Sun className="h-4 w-4 text-amber-400" />
-                  長期休業・運休期間ハイライト（カレンダー自動運休対象）
+                  長期休業・運休期間ハイライト（スプレッドシート値直接バインド・即時自動保存対応）
                 </h3>
                 <span className="text-xs text-slate-400 font-bold">
-                  {basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).length} 件
+                  {(basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).length > 0 ? basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])) : defaultBasicSettings).length} 件
                 </span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).map((period: BasicSettingPeriodRow, idx: number) => {
-                  const name = period.setting_name || period['設定名'] || '休業期間'
-                  const startDate = period.start_date || period['開始日'] || '-'
-                  const endDate = period.end_date || period['終了日'] || '-'
-                  const stdOp = period.standard_operation || period['標準運行'] || '運休'
-                  const contentTime = period.content_time || period['内容・時刻'] || '全便運休'
-                  const note = period.note || period['備考'] || ''
+                {(() => {
+                  const sourceRows = basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日'])).length > 0
+                    ? basicSettings.filter((b: BasicSettingPeriodRow) => (b.start_date || b['開始日']))
+                    : defaultBasicSettings
 
-                  const isSpring = name.includes('春')
-                  const isSummer = name.includes('夏')
-                  const isWinter = name.includes('冬')
+                  return sourceRows.map((period: BasicSettingPeriodRow, idx: number) => {
+                    const settingName = String(period.setting_name || period['設定名'] || '').trim() || '休業期間'
+                    const rawStart = period.start_date || period['開始日'] || ''
+                    const rawEnd = period.end_date || period['終了日'] || ''
+                    const stdOp = period.standard_operation || period['標準運行'] || '運休'
+                    const contentTime = period.content_time || period['内容・時刻'] || '全便運休'
+                    const note = period.note || period['備考'] || ''
 
-                  return (
-                    <div
-                      key={`period-card-${idx}`}
-                      className="bg-slate-900/70 border border-slate-800 rounded-3xl p-5 space-y-3 hover:border-slate-700 transition-all shadow-lg relative overflow-hidden"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-2.5">
-                          <div className={`p-2.5 rounded-2xl ${
-                            isSummer ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/30' :
-                            isWinter ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/30' :
-                            isSpring ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/30' :
-                            'bg-slate-800 text-slate-300'
-                          }`}>
-                            {isSummer ? <Sun className="h-5 w-5" /> :
-                             isWinter ? <Snowflake className="h-5 w-5" /> :
-                             isSpring ? <Palmtree className="h-5 w-5" /> :
-                             <Ban className="h-5 w-5" />}
+                    const draft = basicSettingDrafts[settingName] || {}
+                    const curStart = draft.start_date !== undefined ? draft.start_date : rawStart
+                    const curEnd = draft.end_date !== undefined ? draft.end_date : rawEnd
+
+                    // スプレッドシート値（C列）に完全一致させた表示用日付文字列（YYYY-MM-DD）
+                    const displayStart = curStart ? curStart.replace(/\//g, '-') : '-'
+                    const displayEnd = curEnd ? curEnd.replace(/\//g, '-') : '-'
+
+                    // HTML5 date picker 用フォーマット (YYYY-MM-DD)
+                    const startForInput = curStart ? curStart.replace(/\//g, '-') : ''
+                    const endForInput = curEnd ? curEnd.replace(/\//g, '-') : ''
+
+                    const isSaving = Boolean(savingRowKeys[settingName])
+                    const isSaved = Boolean(savedRowKeys[settingName])
+
+                    const isSpring = settingName.includes('春')
+                    const isSummer = settingName.includes('夏')
+                    const isWinter = settingName.includes('冬')
+
+                    return (
+                      <div
+                        key={`period-card-${idx}`}
+                        className="bg-slate-900/70 border border-slate-800 rounded-3xl p-5 space-y-3 hover:border-slate-700 transition-all shadow-lg relative overflow-hidden"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center gap-2.5">
+                            <div className={`p-2.5 rounded-2xl ${
+                              isSummer ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/30' :
+                              isWinter ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/30' :
+                              isSpring ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/30' :
+                              'bg-slate-800 text-slate-300'
+                            }`}>
+                              {isSummer ? <Sun className="h-5 w-5" /> :
+                               isWinter ? <Snowflake className="h-5 w-5" /> :
+                               isSpring ? <Palmtree className="h-5 w-5" /> :
+                               <Ban className="h-5 w-5" />}
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">スプレッドシート連動</span>
+                              <h4 className="text-base font-black text-white">{settingName}</h4>
+                            </div>
                           </div>
-                          <div>
-                            <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold block">長期休業日</span>
-                            <h4 className="text-base font-black text-white">{name}</h4>
-                          </div>
-                        </div>
 
-                        <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                          {stdOp}
-                        </span>
-                      </div>
-
-                      <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-900 text-xs space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-[11px]">日程:</span>
-                          <span className="font-mono font-bold text-amber-300 tracking-wide text-xs">
-                            {startDate} 〜 {endDate}
+                          <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                            {stdOp}
                           </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 text-[11px]">内容・時刻:</span>
-                          <span className="font-bold text-slate-200 text-xs">{contentTime}</span>
-                        </div>
-                        {note && (
-                          <div className="pt-1.5 text-[11px] text-slate-400 border-t border-slate-900/80">
-                            備考: {note}
-                          </div>
-                        )}
-                      </div>
 
-                      <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold pt-1">
-                        <Check className="h-3.5 w-3.5" />
-                        カレンダー自動運休連動中
+                        <div className="bg-slate-950/80 p-3.5 rounded-2xl border border-slate-900 text-xs space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-400 text-[11px] font-bold">期間（スプレッドシート値）:</span>
+                            <span className="font-mono font-bold text-amber-300 tracking-wide text-xs">
+                              {displayStart} 〜 {displayEnd}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500 text-[11px]">内容・時刻:</span>
+                            <span className="font-bold text-slate-200 text-xs">{contentTime}</span>
+                          </div>
+                          {note && (
+                            <div className="pt-1.5 text-[11px] text-slate-400 border-t border-slate-900/80">
+                              備考: {note}
+                            </div>
+                          )}
+
+                          {/* カード内での即時日付変更入力（変更確定時にスプレッドシートへ即時自動保存） */}
+                          <div className="pt-2 border-t border-slate-900/80 space-y-1.5">
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="text-slate-400 font-bold">カード内即時変更:</span>
+                              {isSaving ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 animate-pulse">
+                                  <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 保存中...
+                                </span>
+                              ) : isSaved ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-300">
+                                  <Check className="h-3 w-3 text-emerald-400" /> ✓ 保存済
+                                </span>
+                              ) : (
+                                <span className="text-slate-600 font-mono">自動保存対応</span>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <span className="text-[9px] text-slate-500 block mb-0.5">開始日</span>
+                                <input
+                                  type="date"
+                                  value={startForInput}
+                                  onChange={(e) => {
+                                    const slashVal = e.target.value ? e.target.value.replace(/-/g, '/') : ''
+                                    handleBasicSettingDraftChange(settingName, 'start_date', slashVal)
+                                    handleAutoSaveBasicSetting(settingName, 'start_date', slashVal)
+                                  }}
+                                  className="w-full bg-slate-900 border border-slate-750 hover:border-amber-500/60 focus:border-amber-500 rounded-lg px-2 py-1 text-[11px] text-amber-300 font-mono focus:outline-none transition-all cursor-pointer shadow-inner"
+                                  title="開始日を選択（変更確定時に即時自動保存）"
+                                />
+                              </div>
+                              <div>
+                                <span className="text-[9px] text-slate-500 block mb-0.5">終了日</span>
+                                <input
+                                  type="date"
+                                  value={endForInput}
+                                  onChange={(e) => {
+                                    const slashVal = e.target.value ? e.target.value.replace(/-/g, '/') : ''
+                                    handleBasicSettingDraftChange(settingName, 'end_date', slashVal)
+                                    handleAutoSaveBasicSetting(settingName, 'end_date', slashVal)
+                                  }}
+                                  className="w-full bg-slate-900 border border-slate-750 hover:border-amber-500/60 focus:border-amber-500 rounded-lg px-2 py-1 text-[11px] text-amber-300 font-mono focus:outline-none transition-all cursor-pointer shadow-inner"
+                                  title="終了日を選択（変更確定時に即時自動保存）"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-bold pt-0.5">
+                          <Check className="h-3.5 w-3.5" />
+                          スプレッドシート＆カレンダー自動運休連動中
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                })()}
               </div>
             </div>
 
@@ -2398,34 +2485,51 @@ export const AdminDashboard: React.FC = () => {
 
               {filteredHolidays.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
-                  {filteredHolidays.map(holiday => (
-                    <div
-                      key={holiday.id}
-                      className="bg-slate-950/60 border border-slate-850 rounded-2xl p-4 flex justify-between items-center text-xs"
-                    >
-                      <div>
-                        <div className="font-bold text-white">{holiday.holiday_name}</div>
-                        <div className="text-[11px] font-mono text-amber-300/90">{holiday.start_date} 〜 {holiday.end_date}</div>
-                        {holiday.note && <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{holiday.note}</div>}
+                  {filteredHolidays.map(holiday => {
+                    // スプレッドシートの basicSettings と名称一致する場合はスプレッドシートの最新日付を直接バインド
+                    const matchingSetting = basicSettings.find(b => {
+                      const bName = (b.setting_name || b['設定名'] || '').trim()
+                      return bName && (holiday.holiday_name.includes(bName) || bName.includes(holiday.holiday_name))
+                    })
+                    const displayStart = matchingSetting ? (matchingSetting.start_date || matchingSetting['開始日'] || holiday.start_date).replace(/\//g, '-') : holiday.start_date
+                    const displayEnd = matchingSetting ? (matchingSetting.end_date || matchingSetting['終了日'] || holiday.end_date).replace(/\//g, '-') : holiday.end_date
+
+                    return (
+                      <div
+                        key={holiday.id}
+                        className="bg-slate-950/60 border border-slate-850 rounded-2xl p-4 flex justify-between items-center text-xs"
+                      >
+                        <div>
+                          <div className="font-bold text-white flex items-center gap-1.5">
+                            {holiday.holiday_name}
+                            {matchingSetting && (
+                              <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/10 text-emerald-300 rounded border border-emerald-500/20">
+                                シート連動
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] font-mono text-amber-300/90">{displayStart} 〜 {displayEnd}</div>
+                          {holiday.note && <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{holiday.note}</div>}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenHolidayModal(holiday)}
+                            className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-all"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteHoliday(holiday)}
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 rounded-lg transition-all"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenHolidayModal(holiday)}
-                          className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-slate-800 rounded-lg transition-all"
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteHoliday(holiday)}
-                          className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 rounded-lg transition-all"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>

@@ -16,7 +16,7 @@ import type {
   BasicSettingPeriodRow
 } from '../types/app'
 import type { User } from '@supabase/supabase-js'
-import { mockBusOperations, mockBusRoutes, mockBusStops, mockMonthlyTripSchedules, mockSpecialTripSchedules, mockSchoolHolidays } from '../lib/mockData'
+import { mockBusOperations, mockBusRoutes, mockBusStops, mockMonthlyTripSchedules, mockSpecialTripSchedules, mockSchoolHolidays, defaultBasicSettings } from '../lib/mockData'
 import { getJapaneseHolidayName } from '../lib/holidays'
 import { 
   getGuardianData, 
@@ -226,8 +226,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [rideStatuses, setRideStatuses] = useState<RideStatus[]>(() => loadFromStorage(STORAGE_KEYS.RIDE_STATUSES, []))
   const [monthlyTripSchedules, setMonthlyTripSchedules] = useState<MonthlyTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.MONTHLY_SCHEDULES, mockMonthlyTripSchedules))
   const [specialTripSchedules, setSpecialTripSchedules] = useState<SpecialTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.SPECIAL_SCHEDULES, mockSpecialTripSchedules))
-  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHoliday[]>(() => loadFromStorage(STORAGE_KEYS.HOLIDAYS, mockSchoolHolidays))
-  const [basicSettings, setBasicSettings] = useState<BasicSettingPeriodRow[]>(() => loadFromStorage(STORAGE_KEYS.BASIC_SETTINGS, []))
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHoliday[]>(() => {
+    const loaded = loadFromStorage<SchoolHoliday[]>(STORAGE_KEYS.HOLIDAYS, mockSchoolHolidays)
+    // 過去の古い固定モックキャッシュ（2027-01-07 等）を完全サニタイズ
+    return loaded.map(h => {
+      if (h.end_date === '2027-01-07' || (h.holiday_name.includes('冬') && h.end_date.includes('01-07'))) {
+        return { ...h, end_date: '2026-01-06' }
+      }
+      return h
+    })
+  })
+  const [basicSettings, setBasicSettings] = useState<BasicSettingPeriodRow[]>(() => {
+    const loaded = loadFromStorage<BasicSettingPeriodRow[]>(STORAGE_KEYS.BASIC_SETTINGS, [])
+    if (loaded && loaded.length > 0) {
+      // 過去キャッシュ内に誤った 2027-01-07 があれば排除
+      return loaded.map(b => {
+        const end = (b.end_date || b['終了日'] || '').trim()
+        if (end.includes('01/07') || end.includes('01-07')) {
+          return { ...b, end_date: '2026/01/06', '終了日': '2026/01/06' }
+        }
+        return b
+      })
+    }
+    return defaultBasicSettings
+  })
 
   // 各ステート変更時に LocalStorage へ即時自動永続化
   useEffect(() => { saveToStorage(STORAGE_KEYS.STUDENTS, students) }, [students])

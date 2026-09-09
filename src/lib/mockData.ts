@@ -1,4 +1,4 @@
-import type { Student, BusRoute, BusStop, BusOperation, MonthlyTripSchedule, SpecialTripSchedule, SchoolHoliday } from '../types/app'
+import type { Student, BusRoute, BusStop, BusOperation, MonthlyTripSchedule, SpecialTripSchedule, SchoolHoliday, BasicSettingPeriodRow } from '../types/app'
 
 export const mockBusRoutes: BusRoute[] = [
   {
@@ -180,11 +180,11 @@ export const mockSpecialTripSchedules: SpecialTripSchedule[] = [
   }
 ]
 
-// 長期休業・学校休業期間（サンプル）
+// 長期休業・学校休業期間（スプレッドシート基本設定準拠サンプル）
 export const mockSchoolHolidays: SchoolHoliday[] = [
   {
     id: 'sh-spring-2026',
-    holiday_name: '春季休業期間（春休み）',
+    holiday_name: '春休み',
     start_date: '2026-03-26',
     end_date: '2026-04-06',
     holiday_type: 'spring',
@@ -193,7 +193,7 @@ export const mockSchoolHolidays: SchoolHoliday[] = [
   },
   {
     id: 'sh-summer-2026',
-    holiday_name: '夏季休業期間（夏休み）',
+    holiday_name: '夏休み',
     start_date: '2026-07-21',
     end_date: '2026-08-24',
     holiday_type: 'summer',
@@ -202,7 +202,7 @@ export const mockSchoolHolidays: SchoolHoliday[] = [
   },
   {
     id: 'sh-closed-2026',
-    holiday_name: '学校閉庁日（お盆期間）',
+    holiday_name: '学校閉庁日',
     start_date: '2026-08-12',
     end_date: '2026-08-16',
     holiday_type: 'closed',
@@ -211,7 +211,7 @@ export const mockSchoolHolidays: SchoolHoliday[] = [
   },
   {
     id: 'sh-winter-2026',
-    holiday_name: '冬季休業期間（冬休み）',
+    holiday_name: '冬休み',
     start_date: '2026-12-25',
     end_date: '2026-01-06',
     holiday_type: 'winter',
@@ -219,3 +219,50 @@ export const mockSchoolHolidays: SchoolHoliday[] = [
     created_at: new Date().toISOString()
   }
 ]
+
+// スプレッドシート「基本設定・運休期間」シートの初期フォールバック値
+export const defaultBasicSettings: BasicSettingPeriodRow[] = [
+  {
+    setting_name: '春休み',
+    start_date: '2026/03/26',
+    end_date: '2026/04/06',
+    standard_operation: '運休',
+    content_time: '全便運休',
+    note: '新年度準備',
+    '設定名': '春休み',
+    '開始日': '2026/03/26',
+    '終了日': '2026/04/06',
+    '標準運行': '運休',
+    '内容・時刻': '全便運休',
+    '備考': '新年度準備'
+  },
+  {
+    setting_name: '夏休み',
+    start_date: '2026/07/21',
+    end_date: '2026/08/24',
+    standard_operation: '運休',
+    content_time: '全便運休',
+    note: '夏季休業期間',
+    '設定名': '夏休み',
+    '開始日': '2026/07/21',
+    '終了日': '2026/08/24',
+    '標準運行': '運休',
+    '内容・時刻': '全便運休',
+    '備考': '夏季休業期間'
+  },
+  {
+    setting_name: '冬休み',
+    start_date: '2026/12/25',
+    end_date: '2026/01/06',
+    standard_operation: '運休',
+    content_time: '全便運休',
+    note: '冬季休業期間',
+    '設定名': '冬休み',
+    '開始日': '2026/12/25',
+    '終了日': '2026/01/06',
+    '標準運行': '運休',
+    '内容・時刻': '全便運休',
+    '備考': '冬季休業期間'
+  }
+]
+
