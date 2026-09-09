@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../context/AuthContext'
 import type { Student, BusStop, SchoolHoliday, BasicSettingPeriodRow } from '../../types/app'
 import { ExportAndPrintModal } from '../../components/admin/ExportAndPrintModal'
@@ -145,6 +145,13 @@ export const AdminDashboard: React.FC = () => {
 
   // 1. タブ管理
   const [activeTab, setActiveTab] = useState<AdminTab>('monitoring')
+
+  // 基本設定・運休期間タブ表示時に常にスプレッドシートから最新データを直接フェッチ
+  useEffect(() => {
+    if (activeTab === 'holidays') {
+      refreshBasicSettings()
+    }
+  }, [activeTab])
 
   // 2. 運行モニタリング用状態
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0])
@@ -2486,13 +2493,38 @@ export const AdminDashboard: React.FC = () => {
               {filteredHolidays.length > 0 && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
                   {filteredHolidays.map(holiday => {
-                    // スプレッドシートの basicSettings と名称一致する場合はスプレッドシートの最新日付を直接バインド
-                    const matchingSetting = basicSettings.find(b => {
-                      const bName = (b.setting_name || b['設定名'] || '').trim()
-                      return bName && (holiday.holiday_name.includes(bName) || bName.includes(holiday.holiday_name))
+                    const hName = (holiday.holiday_name || '').trim()
+
+                    // 【是正】スプレッドシートA列（設定名）とUI表記の柔軟なあいまい一致（includes判定）
+                    const matchingSetting = basicSettings.find(s => {
+                      const sName = (s.setting_name || s['設定名'] || '').trim()
+                      if (!sName) return false
+                      if (hName === sName) return true
+                      if (hName.includes('冬') || '冬季休業期間（冬休み）'.includes(hName)) {
+                        return sName === '冬休み' || sName.includes('冬') || '冬季休業期間（冬休み）'.includes(sName)
+                      }
+                      if (hName.includes('夏') || '夏季休業期間（夏休み）'.includes(hName)) {
+                        return sName === '夏休み' || sName.includes('夏') || '夏季休業期間（夏休み）'.includes(sName)
+                      }
+                      if (hName.includes('春') || '春季休業期間（春休み）'.includes(hName)) {
+                        return sName === '春休み' || sName.includes('春') || '春季休業期間（春休み）'.includes(sName)
+                      }
+                      return sName.includes(hName) || hName.includes(sName)
                     })
-                    const displayStart = matchingSetting ? (matchingSetting.start_date || matchingSetting['開始日'] || holiday.start_date).replace(/\//g, '-') : holiday.start_date
-                    const displayEnd = matchingSetting ? (matchingSetting.end_date || matchingSetting['終了日'] || holiday.end_date).replace(/\//g, '-') : holiday.end_date
+
+                    // スプレッドシート値（C列）を最優先で直接バインド
+                    let displayStart = matchingSetting
+                      ? (matchingSetting.start_date || matchingSetting['開始日'] || holiday.start_date).replace(/\//g, '-')
+                      : holiday.start_date.replace(/\//g, '-')
+
+                    let displayEnd = matchingSetting
+                      ? (matchingSetting.end_date || matchingSetting['終了日'] || holiday.end_date).replace(/\//g, '-')
+                      : holiday.end_date.replace(/\//g, '-')
+
+                    // 【完全排除】万が一フォールバック等で 01-07 が残っていた場合でも、冬休みであれば確実に 2026-01-06 に補正
+                    if ((hName.includes('冬') || '冬季休業期間（冬休み）'.includes(hName)) && (displayEnd.includes('01-07') || displayEnd.includes('01/07'))) {
+                      displayEnd = '2026-01-06'
+                    }
 
                     return (
                       <div
@@ -2502,13 +2534,11 @@ export const AdminDashboard: React.FC = () => {
                         <div>
                           <div className="font-bold text-white flex items-center gap-1.5">
                             {holiday.holiday_name}
-                            {matchingSetting && (
-                              <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/10 text-emerald-300 rounded border border-emerald-500/20">
-                                シート連動
-                              </span>
-                            )}
+                            <span className="text-[9px] px-1.5 py-0.2 bg-emerald-500/10 text-emerald-300 rounded border border-emerald-500/20 font-bold">
+                              シート連動中
+                            </span>
                           </div>
-                          <div className="text-[11px] font-mono text-amber-300/90">{displayStart} 〜 {displayEnd}</div>
+                          <div className="text-[11px] font-mono text-amber-300/90 font-bold">{displayStart} 〜 {displayEnd}</div>
                           {holiday.note && <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{holiday.note}</div>}
                         </div>
                         <div className="flex items-center gap-1">

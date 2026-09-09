@@ -134,18 +134,32 @@ export interface MockUser {
   }
 }
 
-// LocalStorage 永続化キーの定義
+// 過去のLocalStorageキャッシュ（古いモック値や固定値 2027-01-07 等）を完全強制削除
+if (typeof window !== 'undefined') {
+  try {
+    const obsoleteHolidayKeys = [
+      'school_bus_basic_settings',
+      'school_bus_basic_settings_v2',
+      'school_bus_holidays',
+      'school_bus_holidays_v2',
+      'school_bus_school_holidays'
+    ]
+    obsoleteHolidayKeys.forEach(k => localStorage.removeItem(k))
+  } catch (e) {
+    console.warn('Failed to clear obsolete holiday caches from localStorage', e)
+  }
+}
+
+// LocalStorage 永続化キーの定義（※基本設定・休業日はスプレッドシート直接取得のため完全除外）
 const STORAGE_KEYS = {
   STUDENTS: 'school_bus_students_master_v2',
   MONTHLY_SCHEDULES: 'school_bus_monthly_schedules_v2',
   SPECIAL_SCHEDULES: 'school_bus_special_schedules_v2',
-  HOLIDAYS: 'school_bus_holidays_v2',
   ROUTES: 'school_bus_routes_v2',
   STOPS: 'school_bus_stops_v2',
   RESERVATIONS: 'school_bus_reservations_v2',
   OPERATIONS: 'school_bus_operations_v2',
-  RIDE_STATUSES: 'school_bus_ride_statuses_v2',
-  BASIC_SETTINGS: 'school_bus_basic_settings_v2'
+  RIDE_STATUSES: 'school_bus_ride_statuses_v2'
 }
 
 const loadFromStorage = <T,>(key: string, defaultValue: T): T => {
@@ -226,42 +240,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [rideStatuses, setRideStatuses] = useState<RideStatus[]>(() => loadFromStorage(STORAGE_KEYS.RIDE_STATUSES, []))
   const [monthlyTripSchedules, setMonthlyTripSchedules] = useState<MonthlyTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.MONTHLY_SCHEDULES, mockMonthlyTripSchedules))
   const [specialTripSchedules, setSpecialTripSchedules] = useState<SpecialTripSchedule[]>(() => loadFromStorage(STORAGE_KEYS.SPECIAL_SCHEDULES, mockSpecialTripSchedules))
-  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHoliday[]>(() => {
-    const loaded = loadFromStorage<SchoolHoliday[]>(STORAGE_KEYS.HOLIDAYS, mockSchoolHolidays)
-    // 過去の古い固定モックキャッシュ（2027-01-07 等）を完全サニタイズ
-    return loaded.map(h => {
-      if (h.end_date === '2027-01-07' || (h.holiday_name.includes('冬') && h.end_date.includes('01-07'))) {
-        return { ...h, end_date: '2026-01-06' }
-      }
-      return h
-    })
-  })
-  const [basicSettings, setBasicSettings] = useState<BasicSettingPeriodRow[]>(() => {
-    const loaded = loadFromStorage<BasicSettingPeriodRow[]>(STORAGE_KEYS.BASIC_SETTINGS, [])
-    if (loaded && loaded.length > 0) {
-      // 過去キャッシュ内に誤った 2027-01-07 があれば排除
-      return loaded.map(b => {
-        const end = (b.end_date || b['終了日'] || '').trim()
-        if (end.includes('01/07') || end.includes('01-07')) {
-          return { ...b, end_date: '2026/01/06', '終了日': '2026/01/06' }
-        }
-        return b
-      })
-    }
-    return defaultBasicSettings
-  })
+  
+  // 【是正】基本設定および休業日は localStorage キャッシュを完全全廃！
+  // ブラウザ保存領域を見ず、常に初期値（スプレッドシート準拠）で開始後、GASから直接最新データをフェッチしてステートに保持
+  const [schoolHolidays, setSchoolHolidays] = useState<SchoolHoliday[]>(mockSchoolHolidays)
+  const [basicSettings, setBasicSettings] = useState<BasicSettingPeriodRow[]>(defaultBasicSettings)
 
-  // 各ステート変更時に LocalStorage へ即時自動永続化
+  // 各ステート変更時に LocalStorage へ即時自動永続化（※基本設定・休業日は完全除外）
   useEffect(() => { saveToStorage(STORAGE_KEYS.STUDENTS, students) }, [students])
   useEffect(() => { saveToStorage(STORAGE_KEYS.MONTHLY_SCHEDULES, monthlyTripSchedules) }, [monthlyTripSchedules])
   useEffect(() => { saveToStorage(STORAGE_KEYS.SPECIAL_SCHEDULES, specialTripSchedules) }, [specialTripSchedules])
-  useEffect(() => { saveToStorage(STORAGE_KEYS.HOLIDAYS, schoolHolidays) }, [schoolHolidays])
   useEffect(() => { saveToStorage(STORAGE_KEYS.ROUTES, busRoutes) }, [busRoutes])
   useEffect(() => { saveToStorage(STORAGE_KEYS.STOPS, busStops) }, [busStops])
   useEffect(() => { saveToStorage(STORAGE_KEYS.RESERVATIONS, reservations) }, [reservations])
   useEffect(() => { saveToStorage(STORAGE_KEYS.OPERATIONS, busOperations) }, [busOperations])
   useEffect(() => { saveToStorage(STORAGE_KEYS.RIDE_STATUSES, rideStatuses) }, [rideStatuses])
-  useEffect(() => { saveToStorage(STORAGE_KEYS.BASIC_SETTINGS, basicSettings) }, [basicSettings])
 
   // 保護者データの同期（GAS action: "getGuardianData" を送信）
   const syncGuardianData = useCallback(async (email: string) => {
@@ -663,14 +656,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let found = false
         updated = updated.map(h => {
           const isMatch = 
-            (name.includes('冬') && h.holiday_name.includes('冬')) ||
-            (name.includes('夏') && h.holiday_name.includes('夏')) ||
-            (name.includes('春') && h.holiday_name.includes('春')) ||
-            h.holiday_name.includes(name)
+            name === h.holiday_name ||
+            (name.includes('冬') && (h.holiday_name.includes('冬') || '冬季休業期間（冬休み）'.includes(h.holiday_name) || h.holiday_name.includes('冬季休業'))) ||
+            (name.includes('夏') && (h.holiday_name.includes('夏') || '夏季休業期間（夏休み）'.includes(h.holiday_name) || h.holiday_name.includes('夏季休業'))) ||
+            (name.includes('春') && (h.holiday_name.includes('春') || '春季休業期間（春休み）'.includes(h.holiday_name) || h.holiday_name.includes('春季休業'))) ||
+            h.holiday_name.includes(name) ||
+            name.includes(h.holiday_name)
+
           if (isMatch) {
             found = true
             return {
               ...h,
+              holiday_name: name,
               start_date: startHyphen || h.start_date,
               end_date: endHyphen || h.end_date,
               note: note || h.note
@@ -762,13 +759,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSchoolHolidays(prev => {
       return prev.map(h => {
         const isMatch = 
-          (settingName.includes('冬') && h.holiday_name.includes('冬')) ||
-          (settingName.includes('夏') && h.holiday_name.includes('夏')) ||
-          (settingName.includes('春') && h.holiday_name.includes('春')) ||
-          h.holiday_name.includes(settingName)
+          settingName === h.holiday_name ||
+          (settingName.includes('冬') && (h.holiday_name.includes('冬') || '冬季休業期間（冬休み）'.includes(h.holiday_name) || h.holiday_name.includes('冬季休業'))) ||
+          (settingName.includes('夏') && (h.holiday_name.includes('夏') || '夏季休業期間（夏休み）'.includes(h.holiday_name) || h.holiday_name.includes('夏季休業'))) ||
+          (settingName.includes('春') && (h.holiday_name.includes('春') || '春季休業期間（春休み）'.includes(h.holiday_name) || h.holiday_name.includes('春季休業'))) ||
+          h.holiday_name.includes(settingName) ||
+          settingName.includes(h.holiday_name)
+
         if (isMatch) {
           return {
             ...h,
+            holiday_name: settingName,
             start_date: startHyphen || h.start_date,
             end_date: endHyphen || h.end_date,
             note: note || h.note
