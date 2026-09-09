@@ -93,6 +93,10 @@ function handleRequest(params, method) {
         return createJsonResponse(saveGuardianMasterToSheet(params));
       case 'getBusStops':
         return createJsonResponse(getBusStopsFromSheet());
+      case 'saveBusStop':
+        return createJsonResponse(saveBusStopToSheet(params));
+      case 'deleteBusStop':
+        return createJsonResponse(deleteBusStopFromSheet(params.name || params.bus_stop_name));
       case 'getBasicSettings':
         return createJsonResponse(getBasicSettingsFromSheet());
       case 'saveBasicSetting':
@@ -146,6 +150,36 @@ function formatDateToSlash(val) {
     const d = ('0' + parts[2]).slice(-2);
     return y + '/' + m + '/' + d;
   }
+  return str;
+}
+
+/**
+ * 時刻文字列を確実に「HH:mm」形式（日付部分を完全排除）に変換
+ */
+function formatTimeToHHmmGAS(val) {
+  if (!val && val !== 0) return '';
+  if (val instanceof Date) {
+    const hh = ('0' + val.getHours()).slice(-2);
+    const mm = ('0' + val.getMinutes()).slice(-2);
+    return hh + ':' + mm;
+  }
+  const str = String(val).trim();
+  if (!str) return '';
+
+  const match = str.match(/(?:(?:^|\s|T))(\d{1,2}):(\d{2})(?::\d{2})?/);
+  if (match) {
+    const hh = ('0' + match[1]).slice(-2);
+    const mm = ('0' + match[2]).slice(-2);
+    return hh + ':' + mm;
+  }
+
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const hh = ('0' + d.getHours()).slice(-2);
+    const mm = ('0' + d.getMinutes()).slice(-2);
+    return hh + ':' + mm;
+  }
+
   return str;
 }
 
@@ -600,11 +634,11 @@ function getBusStopsFromSheet() {
     results.push({
       stop_name: String(values[i][0] || '').trim(),
       address: String(values[i][1] || '').trim(),
-      arrival_time_morning: String(values[i][2] || '').trim(),
+      arrival_time_morning: formatTimeToHHmmGAS(values[i][2]),
       order_index: Number(values[i][3] || i + 1),
       'バス停名': String(values[i][0] || '').trim(),
       '住所': String(values[i][1] || '').trim(),
-      '到着予定時刻（登校便）': String(values[i][2] || '').trim(),
+      '到着予定時刻（登校便）': formatTimeToHHmmGAS(values[i][2]),
       '停車順序': values[i][3]
     });
   }
@@ -869,4 +903,99 @@ function saveSchoolTimetableToSheet(params) {
     };
   }
 }
+
+/**
+ * 15. バス停マスタの保存・更新・追加（管理者限定）
+ * A列（バス停名）をキーに検索し、更新または新規追加
+ */
+function saveBusStopToSheet(params) {
+  const name = String(params.name || params.bus_stop_name || params['バス停名'] || '').trim();
+  const oldName = String(params.old_name || params.oldName || name).trim();
+  if (!name) {
+    return { status: 'error', message: 'バス停名（A列）が指定されていません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('バス停マスタ');
+  if (!sheet) {
+    sheet = ss.insertSheet('バス停マスタ');
+    sheet.appendRow(['バス停名', '住所', '到着予定時刻（登校便）', '停車順序']);
+  }
+
+  const address = String(params.address || params['住所'] || '').trim();
+  const arrivalTime = formatTimeToHHmmGAS(params.arrival_time_morning || params.arrivalTime || params['到着予定時刻（登校便）'] || '');
+  const order = Number(params.order || params.order_index || params['停車順序'] || 0);
+
+  const lastRow = sheet.getLastRow();
+  let targetRow = -1;
+
+  if (lastRow >= 2) {
+    const names = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < names.length; i++) {
+      const rowName = String(names[i][0]).trim();
+      if (rowName === oldName || rowName === name) {
+        targetRow = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (targetRow > 0) {
+    sheet.getRange(targetRow, 1, 1, 4).setValues([[
+      name,
+      address,
+      arrivalTime,
+      order || (targetRow - 1)
+    ]]);
+    return {
+      status: 'success',
+      message: 'バス停マスタを更新しました',
+      action: 'updated',
+      row: targetRow,
+      name: name
+    };
+  } else {
+    const newOrder = order || (lastRow >= 2 ? lastRow : 1);
+    sheet.appendRow([name, address, arrivalTime, newOrder]);
+    return {
+      status: 'success',
+      message: 'バス停マスタに新規追加しました',
+      action: 'inserted',
+      row: sheet.getLastRow(),
+      name: name
+    };
+  }
+}
+
+/**
+ * 16. バス停マスタの削除（管理者限定）
+ */
+function deleteBusStopFromSheet(stopName) {
+  const targetName = String(stopName || '').trim();
+  if (!targetName) {
+    return { status: 'error', message: '削除対象のバス停名が指定されていません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('バス停マスタ');
+  if (!sheet) return { status: 'error', message: 'バス停マスタシートが存在しません' };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'error', message: '削除対象のデータがありません' };
+
+  const names = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < names.length; i++) {
+    if (String(names[i][0]).trim() === targetName) {
+      sheet.deleteRow(i + 2);
+      return {
+        status: 'success',
+        message: `バス停「${targetName}」を削除しました`,
+        name: targetName
+      };
+    }
+  }
+
+  return { status: 'error', message: `バス停「${targetName}」が見つかりませんでした` };
+}
+
 

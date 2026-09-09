@@ -58,6 +58,41 @@ export function formatNowJ(): string {
 }
 
 /**
+ * 時刻文字列を確実に「HH:mm」形式（日付部分を完全排除）に正規化
+ * 例: "1899/12/30 07:45:00" -> "07:45"
+ * 例: "07:45:00" -> "07:45"
+ * 例: "7:45" -> "07:45"
+ */
+export function formatTimeToHHmm(val: any): string {
+  if (!val && val !== 0) return ''
+  if (val instanceof Date) {
+    const h = String(val.getHours()).padStart(2, '0')
+    const m = String(val.getMinutes()).padStart(2, '0')
+    return `${h}:${m}`
+  }
+  const str = String(val).trim()
+  if (!str) return ''
+
+  // 1. ISO/Date文字列または通常文字列から時:分を抽出
+  const match = str.match(/(?:(?:^|\s|T))(\d{1,2}):(\d{2})(?::\d{2})?/)
+  if (match) {
+    const h = match[1].padStart(2, '0')
+    const m = match[2].padStart(2, '0')
+    return `${h}:${m}`
+  }
+
+  // 2. Dateオブジェクトへのフォールバック変換
+  const d = new Date(str)
+  if (!isNaN(d.getTime())) {
+    const h = String(d.getHours()).padStart(2, '0')
+    const m = String(d.getMinutes()).padStart(2, '0')
+    return `${h}:${m}`
+  }
+
+  return str
+}
+
+/**
  * GAS GETリクエスト送信
  */
 async function sendGASGet<T>(params: Record<string, string>): Promise<{ success: boolean; data?: T; message?: string }> {
@@ -160,7 +195,7 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
   const busStops: BusStopRow[] = (Array.isArray(rawStops) ? rawStops : []).map((row: any) => ({
     name: String(row.name || row.bus_stop_name || row['バス停名'] || '').trim(),
     address: String(row.address || row['住所'] || '').trim(),
-    arrival_time_morning: String(row.arrival_time_morning || row['到着予定時刻（登校便）'] || row['到着予定時刻'] || '').trim(),
+    arrival_time_morning: formatTimeToHHmm(row.arrival_time_morning || row['到着予定時刻（登校便）'] || row['到着予定時刻'] || ''),
     order: Number(row.order || row.order_index || row['停車順序'] || 0)
   })).filter(b => b.name)
 
@@ -329,3 +364,34 @@ export async function saveSchoolTimetableToSheet(payload: {
     calendar_label: payload.calendar_label || ''
   })
 }
+
+/**
+ * 6. バス停マスタの保存・更新・追加（action: "saveBusStop"）
+ */
+export async function saveBusStopToSheet(payload: {
+  name: string
+  old_name?: string
+  address?: string
+  arrival_time_morning?: string
+  order?: number
+}): Promise<{ success: boolean; message?: string }> {
+  return sendGASPost({
+    action: 'saveBusStop',
+    name: payload.name.trim(),
+    old_name: payload.old_name ? payload.old_name.trim() : payload.name.trim(),
+    address: payload.address || '',
+    arrival_time_morning: formatTimeToHHmm(payload.arrival_time_morning || ''),
+    order: payload.order !== undefined ? Number(payload.order) : 0
+  })
+}
+
+/**
+ * 7. バス停マスタの削除（action: "deleteBusStop"）
+ */
+export async function deleteBusStopFromSheet(stopName: string): Promise<{ success: boolean; message?: string }> {
+  return sendGASPost({
+    action: 'deleteBusStop',
+    name: stopName.trim()
+  })
+}
+

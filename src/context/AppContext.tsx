@@ -14,7 +14,9 @@ import {
   saveReservationToSheet, 
   saveBasicSettingToSheet,
   saveGuardianMasterToSheet,
-  saveSchoolTimetableToSheet
+  saveSchoolTimetableToSheet,
+  saveBusStopToSheet,
+  deleteBusStopFromSheet
 } from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
@@ -47,6 +49,8 @@ interface AppContextType {
   saveBasicSetting: (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveGuardianMaster: (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveSchoolTimetable: (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveBusStop: (payload: Parameters<typeof saveBusStopToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  deleteBusStop: (stopName: string) => Promise<{ success: boolean; message?: string }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -271,6 +275,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
+  // バス停マスタの保存・更新・追加
+  const handleSaveBusStop = async (payload: Parameters<typeof saveBusStopToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const res = await saveBusStopToSheet(payload)
+      if (res.success) {
+        setData(prev => {
+          const targetOldName = (payload.old_name || payload.name).trim()
+          const newName = payload.name.trim()
+          const exists = prev.busStops.some(b => b.name === targetOldName)
+          let updated: BusStopRow[]
+          if (exists) {
+            updated = prev.busStops.map(b => {
+              if (b.name === targetOldName) {
+                return {
+                  name: newName,
+                  address: payload.address !== undefined ? payload.address : b.address,
+                  arrival_time_morning: payload.arrival_time_morning !== undefined ? payload.arrival_time_morning : b.arrival_time_morning,
+                  order: payload.order !== undefined ? Number(payload.order) : b.order
+                }
+              }
+              return b
+            })
+          } else {
+            updated = [
+              ...prev.busStops,
+              {
+                name: newName,
+                address: payload.address || '',
+                arrival_time_morning: payload.arrival_time_morning || '',
+                order: payload.order !== undefined ? Number(payload.order) : prev.busStops.length + 1
+              }
+            ]
+          }
+          updated.sort((a, b) => (a.order || 0) - (b.order || 0))
+          return { ...prev, busStops: updated }
+        })
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // バス停マスタの削除
+  const handleDeleteBusStop = async (stopName: string) => {
+    setSyncing(true)
+    try {
+      const res = await deleteBusStopFromSheet(stopName)
+      if (res.success) {
+        setData(prev => ({
+          ...prev,
+          busStops: prev.busStops.filter(b => b.name !== stopName.trim())
+        }))
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <AppContext.Provider
       value={{
@@ -290,7 +357,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveReservation: handleSaveReservation,
         saveBasicSetting: handleSaveBasicSetting,
         saveGuardianMaster: handleSaveGuardianMaster,
-        saveSchoolTimetable: handleSaveSchoolTimetable
+        saveSchoolTimetable: handleSaveSchoolTimetable,
+        saveBusStop: handleSaveBusStop,
+        deleteBusStop: handleDeleteBusStop
       }}
     >
       {children}
