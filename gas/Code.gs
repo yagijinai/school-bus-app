@@ -91,6 +91,10 @@ function handleRequest(params, method) {
         return createJsonResponse(getGuardianMasterFromSheet());
       case 'saveGuardianMaster':
         return createJsonResponse(saveGuardianMasterToSheet(params));
+      case 'registerNewStudentWithCode':
+        return createJsonResponse(registerNewStudentWithCodeToSheet(params));
+      case 'linkStudentWithCode':
+        return createJsonResponse(linkStudentWithCodeToSheet(params));
       case 'getBusStops':
         return createJsonResponse(getBusStopsFromSheet());
       case 'saveBusStop':
@@ -529,7 +533,8 @@ function getGuardianMasterFromSheet() {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return { status: 'success', data: [] };
 
-  const data = sheet.getRange(2, 1, lastRow - 1, 9).getValues();
+  const numCols = Math.max(sheet.getLastColumn(), 10);
+  const data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
   const results = [];
   for (let i = 0; i < data.length; i++) {
     const email = String(data[i][0] || '').trim().toLowerCase();
@@ -541,10 +546,14 @@ function getGuardianMasterFromSheet() {
     const memo = String(data[i][6] || '').trim();
     const toSchool = String(data[i][7] || '').trim();
     const fromSchool = String(data[i][8] || '').trim();
+    const authCode = String(data[i][9] || '').trim();
+
+    const names = [s1, s2, s3, s4].filter(Boolean);
 
     results.push({
       email: email,
       parent_email: email,
+      student_names: names,
       student_name_1: s1,
       student_name_2: s2 || null,
       student_name_3: s3 || null,
@@ -553,6 +562,7 @@ function getGuardianMasterFromSheet() {
       note: memo || null,
       default_morning: toSchool,
       default_afternoon: fromSchool,
+      auth_code: authCode,
       '保護者メールアドレス': email,
       '生徒名１': s1,
       '生徒名２': s2,
@@ -561,7 +571,8 @@ function getGuardianMasterFromSheet() {
       '登録バス停名': busStop,
       '備考': memo,
       '基本_登校': toSchool,
-      '基本_下校': fromSchool
+      '基本_下校': fromSchool,
+      '認証コード': authCode
     });
   }
   return { status: 'success', data: results };

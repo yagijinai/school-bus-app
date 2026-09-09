@@ -186,9 +186,10 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
       bus_stop_name: String(row.bus_stop_name || row['登録バス停名'] || '').trim(),
       note: String(row.note || row['備考'] || '').trim(),
       default_morning: String(row.default_morning || row['基本_登校'] || '').trim(),
-      default_afternoon: String(row.default_afternoon || row['基本_下校'] || '').trim()
+      default_afternoon: String(row.default_afternoon || row['基本_下校'] || '').trim(),
+      auth_code: String(row.auth_code || row['認証コード'] || '').trim()
     }
-  }).filter(g => g.parent_email)
+  }).filter(g => g.parent_email || g.student_names.length > 0 || g.auth_code)
 
   // ② バス停マスタ (A: バス停名, B: 住所, C: 到着予定時刻, D: 停車順序)
   const rawStops = raw.busStops || raw['バス停マスタ'] || []
@@ -392,6 +393,36 @@ export async function deleteBusStopFromSheet(stopName: string): Promise<{ succes
   return sendGASPost({
     action: 'deleteBusStop',
     name: stopName.trim()
+  })
+}
+
+/**
+ * 8. 新入生・新規生徒の事前登録＆認証コード発行（管理者向け action: "registerNewStudentWithCode"）
+ */
+export async function registerNewStudentWithCodeToSheet(payload: {
+  student_name: string
+  bus_stop_name?: string
+  note?: string
+}): Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }> {
+  return sendGASPost({
+    action: 'registerNewStudentWithCode',
+    student_name: payload.student_name.trim(),
+    bus_stop_name: payload.bus_stop_name || '',
+    note: payload.note || ''
+  })
+}
+
+/**
+ * 9. 保護者アカウントと生徒の認証コード連携（action: "linkStudentWithCode"）
+ */
+export async function linkStudentWithCodeToSheet(payload: {
+  email: string
+  code: string
+}): Promise<{ success: boolean; message?: string; student_name?: string; is_sibling?: boolean }> {
+  return sendGASPost({
+    action: 'linkStudentWithCode',
+    email: payload.email.trim().toLowerCase(),
+    code: payload.code.trim()
   })
 }
 

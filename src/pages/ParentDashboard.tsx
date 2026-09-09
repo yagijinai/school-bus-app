@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react'
 import { useApp } from '../context/AppContext'
 import { 
   Bus, 
-  ChevronLeft, ChevronRight, User, RefreshCw, LogOut, CheckCircle2, Ban
+  ChevronLeft, ChevronRight, User, RefreshCw, LogOut, CheckCircle2, Ban,
+  Plus, UserPlus, AlertCircle, X
 } from 'lucide-react'
 import { toSlashDate, toHyphenDate } from '../lib/spreadsheetApi'
 
@@ -10,29 +11,72 @@ export const ParentDashboard: React.FC = () => {
   const { 
     user, logout, guardianMaster, schedules, 
     basicSettings, schoolTimetable, busStops, 
-    saveReservation, syncing, refreshAll 
+    saveReservation, linkStudentWithCode, syncing, refreshAll 
   } = useApp()
 
-  // ログイン保護者のマスターデータ
-  const myGuardian = useMemo(() => {
-    if (!user) return null
-    return guardianMaster.find(g => g.parent_email.toLowerCase() === user.email.toLowerCase()) || null
+  // ログイン保護者のマスターデータ（同メールの全行を取得）
+  const myGuardians = useMemo(() => {
+    if (!user) return []
+    return guardianMaster.filter(g => g.parent_email.toLowerCase() === user.email.toLowerCase())
   }, [user, guardianMaster])
 
-  // 生徒一覧（B〜E列）
+  const myGuardian = myGuardians[0] || null
+
+  // 生徒一覧（B〜E列および同メールの全行からユニーク抽出）
   const studentNames = useMemo(() => {
-    if (!myGuardian) return []
-    return myGuardian.student_names
-  }, [myGuardian])
+    const set = new Set<string>()
+    myGuardians.forEach(g => {
+      g.student_names.forEach(s => {
+        if (s) set.add(s)
+      })
+    })
+    return Array.from(set)
+  }, [myGuardians])
 
   // 選択中の生徒
   const [selectedStudent, setSelectedStudent] = useState<string>('')
   // 初期選択
   React.useEffect(() => {
-    if (studentNames.length > 0 && !selectedStudent) {
+    if (studentNames.length > 0 && (!selectedStudent || !studentNames.includes(selectedStudent))) {
       setSelectedStudent(studentNames[0])
     }
   }, [studentNames, selectedStudent])
+
+  // 兄弟姉妹の追加モーダル状態
+  const [isAddSiblingModalOpen, setIsAddSiblingModalOpen] = useState(false)
+  const [siblingCode, setSiblingCode] = useState('')
+  const [isAddingSibling, setIsAddingSibling] = useState(false)
+  const [siblingError, setSiblingError] = useState<string | null>(null)
+  const [siblingSuccess, setSiblingSuccess] = useState<string | null>(null)
+
+  const handleAddSiblingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!siblingCode.trim() || !user) return
+    setIsAddingSibling(true)
+    setSiblingError(null)
+    setSiblingSuccess(null)
+    try {
+      const res = await linkStudentWithCode({
+        email: user.email,
+        code: siblingCode.trim()
+      })
+      if (res.success) {
+        setSiblingSuccess(`お子様「${res.student_name || ''}」を追加連携しました！`)
+        if (res.student_name) {
+          setSelectedStudent(res.student_name)
+        }
+        setTimeout(() => {
+          setIsAddSiblingModalOpen(false)
+          setSiblingCode('')
+          setSiblingSuccess(null)
+        }, 1200)
+      } else {
+        setSiblingError(res.message || '登録コードの照合に失敗しました')
+      }
+    } finally {
+      setIsAddingSibling(false)
+    }
+  }
 
   // 週間カレンダーの週オフセット（0: 今週, 1: 来週, etc.）
   const [weekOffset, setWeekOffset] = useState<number>(0)
@@ -225,30 +269,39 @@ export const ParentDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* 生徒切り替えタブ（B〜E列） */}
-      {studentNames.length > 0 ? (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {studentNames.map(name => (
-            <button
-              key={name}
-              type="button"
-              onClick={() => setSelectedStudent(name)}
-              className={`px-5 py-2.5 rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md ${
-                selectedStudent === name
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/20 scale-100'
-                  : 'bg-slate-900 hover:bg-slate-850 text-slate-400 border border-slate-800'
-              }`}
-            >
-              <User className="h-4 w-4" />
-              {name}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-300 text-xs">
-          スプレッドシートの「生徒・保護者マスター」にお子様のお名前が登録されていません。管理者に連絡してください。
-        </div>
-      )}
+      {/* 生徒切り替えタブ（B〜E列） ＆ 兄弟追加ボタン */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        {studentNames.map(name => (
+          <button
+            key={name}
+            type="button"
+            onClick={() => setSelectedStudent(name)}
+            className={`px-5 py-2.5 rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md whitespace-nowrap ${
+              selectedStudent === name
+                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/20 scale-100'
+                : 'bg-slate-900 hover:bg-slate-850 text-slate-400 border border-slate-800'
+            }`}
+          >
+            <User className="h-4 w-4" />
+            {name}
+          </button>
+        ))}
+
+        {/* ＋ お子様を追加（兄弟姉妹）ボタン */}
+        <button
+          type="button"
+          onClick={() => {
+            setSiblingError(null)
+            setSiblingSuccess(null)
+            setSiblingCode('')
+            setIsAddSiblingModalOpen(true)
+          }}
+          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-850 border border-dashed border-amber-500/50 hover:border-amber-400 text-amber-300 hover:text-amber-200 rounded-2xl text-xs font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shadow-sm shrink-0"
+        >
+          <Plus className="h-4 w-4 text-amber-400" />
+          お子様を追加（コード入力）
+        </button>
+      </div>
 
       {/* 週間カレンダーコントロール */}
       <div className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-2xl px-4 py-3">
@@ -430,6 +483,92 @@ export const ParentDashboard: React.FC = () => {
           )
         })}
       </div>
+
+      {/* お子様追加（兄弟姉妹）モーダル */}
+      {isAddSiblingModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5 animate-in fade-in zoom-in duration-150">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="text-base font-black text-white flex items-center gap-2">
+                <UserPlus className="h-5 w-5 text-amber-400" />
+                お子様（ご兄弟）の追加登録
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsAddSiblingModalOpen(false)}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddSiblingSubmit} className="space-y-4">
+              <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-xs text-amber-200 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <Plus className="h-3.5 w-3.5 text-amber-400" />
+                  学校配布の登録コードを入力
+                </p>
+                <p className="text-[11px] text-amber-300/80 leading-relaxed">
+                  追加するお子様の登録コード（例: <span className="font-mono font-bold text-amber-300">SB-7829</span>）を入力すると、現在のアカウント（{user?.email}）に兄弟として追加され、タブで切り替えられるようになります。
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  お子様の登録コード（認証コード）
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={siblingCode}
+                  onChange={(e) => setSiblingCode(e.target.value.toUpperCase())}
+                  placeholder="例: SB-7829"
+                  className="w-full px-4 py-3 bg-slate-950 border-2 border-amber-500/50 focus:border-amber-400 rounded-xl text-base font-mono font-bold text-amber-300 text-center tracking-widest placeholder:text-slate-700 outline-none shadow-inner"
+                />
+              </div>
+
+              {siblingError && (
+                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start gap-2 text-rose-300 text-xs">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{siblingError}</span>
+                </div>
+              )}
+
+              {siblingSuccess && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-start gap-2 text-emerald-300 text-xs font-bold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>{siblingSuccess}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddSiblingModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddingSibling}
+                  className="px-5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+                >
+                  {isAddingSibling ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" /> 追加中...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" /> お子様を追加
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

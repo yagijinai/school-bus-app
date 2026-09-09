@@ -15,6 +15,7 @@ export interface GuardianMasterRow {
   note: string
   default_morning: string // 「乗る」または 空白
   default_afternoon: string // 「1便」「2便」「乗らない」等
+  auth_code?: string // J列: 認証コード
 }
 
 // 2. シート名: 「バス停マスタ」

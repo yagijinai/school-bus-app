@@ -16,7 +16,9 @@ import {
   saveGuardianMasterToSheet,
   saveSchoolTimetableToSheet,
   saveBusStopToSheet,
-  deleteBusStopFromSheet
+  deleteBusStopFromSheet,
+  registerNewStudentWithCodeToSheet,
+  linkStudentWithCodeToSheet
 } from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
@@ -42,7 +44,7 @@ interface AppContextType {
   schoolTimetable: SchoolTimetableRow[]
   userPermissions: UserPermissionRow[]
   // 操作
-  login: (email: string) => Promise<{ success: boolean; message?: string }>
+  login: (email: string) => Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }>
   logout: () => void
   refreshAll: () => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
@@ -51,6 +53,8 @@ interface AppContextType {
   saveSchoolTimetable: (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveBusStop: (payload: Parameters<typeof saveBusStopToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   deleteBusStop: (stopName: string) => Promise<{ success: boolean; message?: string }>
+  registerNewStudentWithCode: (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }>
+  linkStudentWithCode: (payload: { email: string; code: string }) => Promise<{ success: boolean; message?: string; student_name?: string }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -93,7 +97,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [refreshAll])
 
   // メールアドレスによるシンプル認証（ドメイン制限撤廃・スプレッドシート完全一致照合）
-  const login = async (inputEmail: string): Promise<{ success: boolean; message?: string }> => {
+  const login = async (inputEmail: string): Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }> => {
     const cleanEmail = inputEmail.trim().toLowerCase()
     if (!cleanEmail) {
       return { success: false, message: 'メールアドレスを入力してください' }
@@ -136,7 +140,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: false,
-      message: `スプレッドシートに登録されていないメールアドレスです（${inputEmail}）。「ユーザー権限マスタ」または「生徒・保護者マスター」に登録されているかご確認ください。`
+      needAuthCode: true,
+      email: cleanEmail,
+      message: 'お子様の登録コードを入力してください'
     }
   }
 
@@ -338,6 +344,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
+  // 新入生・新規生徒の事前登録＆コード発行（管理者）
+  const handleRegisterNewStudentWithCode = async (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const res = await registerNewStudentWithCodeToSheet(payload)
+      if (res.success) {
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 認証コードによる保護者アカウント連携（初回・兄弟追加）
+  const handleLinkStudentWithCode = async (payload: { email: string; code: string }) => {
+    setSyncing(true)
+    try {
+      const res = await linkStudentWithCodeToSheet(payload)
+      if (res.success) {
+        const fresh = await fetchSpreadsheetMaster()
+        setData(fresh)
+        // ログイン状態をセット/更新
+        const cleanEmail = payload.email.trim().toLowerCase()
+        const guardianMatch = fresh.guardianMaster.find(g => g.parent_email.toLowerCase() === cleanEmail)
+        const studentName = res.student_name || guardianMatch?.student_names[0] || 'お子様'
+        setUser({
+          email: cleanEmail,
+          name: `${studentName}の保護者`,
+          role: '保護者'
+        })
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <AppContext.Provider
       value={{
@@ -359,7 +403,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveGuardianMaster: handleSaveGuardianMaster,
         saveSchoolTimetable: handleSaveSchoolTimetable,
         saveBusStop: handleSaveBusStop,
-        deleteBusStop: handleDeleteBusStop
+        deleteBusStop: handleDeleteBusStop,
+        registerNewStudentWithCode: handleRegisterNewStudentWithCode,
+        linkStudentWithCode: handleLinkStudentWithCode
       }}
     >
       {children}
