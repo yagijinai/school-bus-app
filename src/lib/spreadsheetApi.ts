@@ -245,14 +245,39 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
   // ⑥ ユーザー権限マスタ (A: メールアドレス, B: 指名, C: 役割)
   const rawPerms = raw.userPermissions || raw['ユーザー権限マスタ'] || []
   const userPermissions: UserPermissionRow[] = (Array.isArray(rawPerms) ? rawPerms : []).map((row: any) => {
-    let role = String(row.role || row['役割'] || '保護者').trim()
-    if (!['管理者', '運転手', '保護者'].includes(role)) {
+    const rawRole = String(row.role || row['役割'] || '').trim()
+    const roleLower = rawRole.toLowerCase()
+    let role: '管理者' | '運転手' | '保護者' = '保護者'
+
+    // 役割判定：管理者（または教頭・教諭・admin等の管理者キーワードを含む場合）
+    if (
+      rawRole.includes('管理者') ||
+      rawRole.includes('教頭') ||
+      rawRole.includes('教諭') ||
+      rawRole.includes('学校') ||
+      rawRole.includes('教職員') ||
+      roleLower.includes('admin') ||
+      roleLower.includes('principal') ||
+      roleLower.includes('manager') ||
+      roleLower.includes('staff')
+    ) {
+      role = '管理者'
+    } else if (
+      // 役割判定：運転手（またはdriver等を含む場合）
+      rawRole.includes('運転手') ||
+      rawRole.includes('運転') ||
+      rawRole.includes('ドライバー') ||
+      roleLower.includes('driver')
+    ) {
+      role = '運転手'
+    } else {
       role = '保護者'
     }
+
     return {
       email: String(row.email || row['メールアドレス'] || '').trim().toLowerCase(),
       name: String(row.name || row['指名'] || row['氏名'] || '').trim(),
-      role: role as any
+      role
     }
   }).filter(p => p.email)
 
@@ -426,6 +451,25 @@ export async function linkStudentWithCodeToSheet(payload: {
     action: 'linkStudentWithCode',
     email: payload.email.trim().toLowerCase(),
     code: payload.code.trim()
+  })
+}
+
+/**
+ * 10. 生徒・保護者マスターの行削除（action: "deleteGuardianMaster"）
+ */
+export async function deleteGuardianMasterFromSheet(payload: {
+  parent_email?: string
+  auth_code?: string
+  student_name?: string
+}): Promise<{ success: boolean; status?: string; message?: string; [key: string]: any }> {
+  return sendGASPost({
+    action: 'deleteGuardianMaster',
+    parent_email: payload.parent_email ? payload.parent_email.trim().toLowerCase() : '',
+    email: payload.parent_email ? payload.parent_email.trim().toLowerCase() : '',
+    parentEmail: payload.parent_email ? payload.parent_email.trim().toLowerCase() : '',
+    auth_code: payload.auth_code ? payload.auth_code.trim() : '',
+    code: payload.auth_code ? payload.auth_code.trim() : '',
+    student_name: payload.student_name ? payload.student_name.trim() : ''
   })
 }
 

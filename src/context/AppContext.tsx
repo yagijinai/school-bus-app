@@ -18,7 +18,8 @@ import {
   saveBusStopToSheet,
   deleteBusStopFromSheet,
   registerNewStudentWithCodeToSheet,
-  linkStudentWithCodeToSheet
+  linkStudentWithCodeToSheet,
+  deleteGuardianMasterFromSheet
 } from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
@@ -55,6 +56,7 @@ interface AppContextType {
   deleteBusStop: (stopName: string) => Promise<{ success: boolean; message?: string }>
   registerNewStudentWithCode: (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }>
   linkStudentWithCode: (payload: { email: string; code: string }) => Promise<{ success: boolean; message?: string; student_name?: string }>
+  deleteGuardianMaster: (payload: { parent_email?: string; auth_code?: string; student_name?: string }) => Promise<{ success: boolean; status?: string; message?: string; [key: string]: any }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -96,40 +98,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     refreshAll()
   }, [refreshAll])
 
-  // メールアドレスによるシンプル認証（ドメイン制限撤廃・スプレッドシート完全一致照合）
+  // メールアドレスによるシンプル認証（ユーザー権限マスタおよび生徒・保護者マスター完全照合）
   const login = async (inputEmail: string): Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }> => {
     const cleanEmail = inputEmail.trim().toLowerCase()
     if (!cleanEmail) {
       return { success: false, message: 'メールアドレスを入力してください' }
     }
 
-    // 最新データが未取得なら取得
-    let currentPerms = data.userPermissions
-    let currentGuardians = data.guardianMaster
-    if (currentPerms.length === 0 && currentGuardians.length === 0) {
-      setSyncing(true)
-      const fresh = await fetchSpreadsheetMaster()
-      setData(fresh)
-      currentPerms = fresh.userPermissions
-      currentGuardians = fresh.guardianMaster
+    // ログイン時は常にスプレッドシートから最新マスターを取得して確実に照合
+    setSyncing(true)
+    let freshMaster: AllMasterData = data
+    try {
+      freshMaster = await fetchSpreadsheetMaster()
+      setData(freshMaster)
+    } catch (e) {
+      console.warn('Fetch latest master in login failed, using current cache:', e)
+    } finally {
       setSyncing(false)
     }
 
-    // 1. ユーザー権限マスタ（A列: メールアドレス）と完全一致照合
-    const permMatch = currentPerms.find(p => p.email.toLowerCase() === cleanEmail)
+    const currentPerms = freshMaster.userPermissions
+    const currentGuardians = freshMaster.guardianMaster
+
+    // 1. ユーザー権限マスタ（A列: メールアドレス）にそのメールアドレスが存在するかチェック
+    const permMatch = currentPerms.find(p => p.email && p.email.toLowerCase() === cleanEmail)
     if (permMatch) {
+      const rawRole = String(permMatch.role || '')
+      const roleLower = rawRole.toLowerCase()
+      let resolvedRole: '管理者' | '運転手' | '保護者' = permMatch.role
+
+      // 役割が「管理者」（または教頭・教諭・admin等の管理者キーワードを含む場合）→ 管理者コンソール
+      if (
+        permMatch.role === '管理者' ||
+        rawRole.includes('管理者') ||
+        rawRole.includes('教頭') ||
+        rawRole.includes('教諭') ||
+        rawRole.includes('学校') ||
+        rawRole.includes('教職員') ||
+        roleLower.includes('admin') ||
+        roleLower.includes('principal') ||
+        roleLower.includes('manager') ||
+        roleLower.includes('staff')
+      ) {
+        resolvedRole = '管理者'
+      } else if (
+        // 役割が「運転手」（またはdriver等を含む場合）→ 運転手専用コンソール
+        permMatch.role === '運転手' ||
+        rawRole.includes('運転手') ||
+        rawRole.includes('運転') ||
+        rawRole.includes('ドライバー') ||
+        roleLower.includes('driver')
+      ) {
+        resolvedRole = '運転手'
+      }
+
       setUser({
         email: permMatch.email,
-        name: permMatch.name || '利用者',
-        role: permMatch.role
+        name: permMatch.name || (resolvedRole === '管理者' ? '管理者様' : resolvedRole === '運転手' ? '運転手様' : '利用者様'),
+        role: resolvedRole
       })
       return { success: true }
     }
 
-    // 2. 生徒・保護者マスター（A列: 保護者メールアドレス）と完全一致照合
-    const guardianMatch = currentGuardians.find(g => g.parent_email.toLowerCase() === cleanEmail)
+    // 2. 「ユーザー権限マスタ」に該当アドレスがない場合：
+    //    「生徒・保護者マスター」にそのメールアドレスが存在すれば → 保護者カレンダー予約画面へ
+    const guardianMatch = currentGuardians.find(g => g.parent_email && g.parent_email.toLowerCase() === cleanEmail)
     if (guardianMatch) {
-      const studentName = guardianMatch.student_names[0] || '保護者様'
+      const studentName = guardianMatch.student_names[0] || '生徒'
       setUser({
         email: guardianMatch.parent_email,
         name: `${studentName}の保護者`,
@@ -138,6 +173,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true }
     }
 
+    //    「生徒・保護者マスター」にも存在しない場合 → 「お子様の登録コード入力」画面へ誘導
     return {
       success: false,
       needAuthCode: true,
@@ -382,6 +418,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
+  // 生徒・保護者マスターの行削除（action: "deleteGuardianMaster"）
+  const handleDeleteGuardianMaster = async (payload: {
+    parent_email?: string
+    auth_code?: string
+    student_name?: string
+  }) => {
+    setSyncing(true)
+    try {
+      const res = await deleteGuardianMasterFromSheet(payload)
+      const isSuccess = res.success || res.status === 'success'
+      if (isSuccess) {
+        // ローカルの guardianMaster から即座に除外（楽観的更新）
+        setData(prev => ({
+          ...prev,
+          guardianMaster: prev.guardianMaster.filter(g => {
+            if (payload.parent_email && g.parent_email && g.parent_email.toLowerCase() === payload.parent_email.toLowerCase()) {
+              return false
+            }
+            if (payload.auth_code && g.auth_code && g.auth_code === payload.auth_code) {
+              return false
+            }
+            if (!g.parent_email && !g.auth_code && payload.student_name && g.student_names.includes(payload.student_name)) {
+              return false
+            }
+            return true
+          })
+        }))
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <AppContext.Provider
       value={{
@@ -405,7 +476,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveBusStop: handleSaveBusStop,
         deleteBusStop: handleDeleteBusStop,
         registerNewStudentWithCode: handleRegisterNewStudentWithCode,
-        linkStudentWithCode: handleLinkStudentWithCode
+        linkStudentWithCode: handleLinkStudentWithCode,
+        deleteGuardianMaster: handleDeleteGuardianMaster
       }}
     >
       {children}

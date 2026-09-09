@@ -16,6 +16,7 @@ export const AdminDashboard: React.FC = () => {
     guardianMaster, busStops, schoolTimetable,
     saveBasicSetting, saveGuardianMaster, saveSchoolTimetable,
     saveBusStop, deleteBusStop, registerNewStudentWithCode,
+    deleteGuardianMaster,
     syncing, refreshAll 
   } = useApp()
 
@@ -200,6 +201,43 @@ export const AdminDashboard: React.FC = () => {
     navigator.clipboard.writeText(code)
     setCopiedCode(code)
     setTimeout(() => setCopiedCode(null), 2000)
+  }
+
+  // 生徒・保護者マスターの行削除処理
+  const [deletingGuardianKey, setDeletingGuardianKey] = useState<string | null>(null)
+  const handleDeleteGuardianRow = async (g: GuardianMasterRow, idx: number) => {
+    const studentNames = g.student_names.join('・')
+    const displayName = studentNames 
+      ? `${studentNames}さん` 
+      : (g.parent_email || (g.auth_code ? `コード: ${g.auth_code}` : `行 #${idx + 1}`))
+
+    if (!window.confirm(`「${displayName}」のデータを削除してもよろしいですか？\n※スプレッドシート上の該当行が削除されます。`)) {
+      return
+    }
+
+    const rowKey = g.parent_email || g.auth_code || String(idx)
+    setDeletingGuardianKey(rowKey)
+    try {
+      const res = await deleteGuardianMaster({
+        parent_email: g.parent_email,
+        auth_code: g.auth_code,
+        student_name: g.student_names[0]
+      })
+
+      const isSuccess = res.success || res.status === 'success'
+      if (isSuccess) {
+        setSuccessToast({
+          message: `「${displayName}」のデータを削除しました`
+        })
+        setTimeout(() => {
+          setSuccessToast(null)
+        }, 5000)
+      } else {
+        alert(`削除に失敗しました: ${res.message || 'エラーが発生しました'}`)
+      }
+    } finally {
+      setDeletingGuardianKey(null)
+    }
   }
 
   const handleRegisterNewStudent = async (e: React.FormEvent) => {
@@ -1271,6 +1309,7 @@ export const AdminDashboard: React.FC = () => {
                   <th className="py-3 px-3 min-w-[170px]">備考 (G列)</th>
                   <th className="py-3 px-3 min-w-[150px] text-center">認証コード (J列)</th>
                   <th className="py-3 px-3 w-24 text-center">保存状況</th>
+                  <th className="py-3 px-3 w-16 text-center">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-medium">
@@ -1282,6 +1321,7 @@ export const AdminDashboard: React.FC = () => {
 
                   const isSaving = savingGuardianEmail === email
                   const isSaved = savedGuardianEmail === email
+                  const isDeletingThisRow = deletingGuardianKey === (g.parent_email || g.auth_code || String(idx))
 
                   return (
                     <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
@@ -1372,6 +1412,22 @@ export const AdminDashboard: React.FC = () => {
                         ) : (
                           <span className="text-[10px] text-slate-600 font-mono">自動同期</span>
                         )}
+                      </td>
+                      {/* 操作（行削除ボタン） */}
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteGuardianRow(g, idx)}
+                          disabled={isDeletingThisRow}
+                          className="p-1.5 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-xl transition-all border border-transparent hover:border-rose-500/30 disabled:opacity-40 cursor-pointer"
+                          title="この行の生徒・保護者データを削除"
+                        >
+                          {isDeletingThisRow ? (
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin text-rose-400" />
+                          ) : (
+                            <Trash2 className="h-3.5 w-3.5" />
+                          )}
+                        </button>
                       </td>
                     </tr>
                   )
