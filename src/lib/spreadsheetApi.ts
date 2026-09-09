@@ -277,3 +277,55 @@ export async function saveBasicSettingToSheet(payload: {
     note: payload.note || ''
   })
 }
+
+/**
+ * 4. 生徒・保護者マスターの保存・更新（action: "saveGuardianMaster"）
+ */
+export async function saveGuardianMasterToSheet(payload: {
+  parent_email: string
+  student_name_1?: string
+  student_name_2?: string
+  student_name_3?: string
+  student_name_4?: string
+  bus_stop_name: string
+  note?: string
+  default_morning: string
+  default_afternoon: string
+}): Promise<{ success: boolean; message?: string }> {
+  return sendGASPost({
+    action: 'saveGuardianMaster',
+    parentEmail: payload.parent_email.trim().toLowerCase(),
+    student1: payload.student_name_1 || '',
+    student2: payload.student_name_2 || '',
+    student3: payload.student_name_3 || '',
+    student4: payload.student_name_4 || '',
+    busStop: payload.bus_stop_name || '',
+    memo: payload.note || '',
+    defaultToSchool: payload.default_morning || '乗る',
+    defaultFromSchool: payload.default_afternoon || '1便'
+  })
+}
+
+/**
+ * 5. 学校用時刻表の保存・更新（action: "saveSchoolTimetable"）
+ */
+export async function saveSchoolTimetableToSheet(payload: {
+  date: string // YYYY/MM/DD
+  morning_trip?: string
+  afternoon_trip_1?: string
+  afternoon_trip_2?: string
+  afternoon_trip_3?: string
+  note?: string
+  calendar_label?: string
+}): Promise<{ success: boolean; message?: string }> {
+  return sendGASPost({
+    action: 'saveSchoolTimetable',
+    date: toSlashDate(payload.date),
+    morning_trip: payload.morning_trip || '',
+    afternoon_trip_1: payload.afternoon_trip_1 || '',
+    afternoon_trip_2: payload.afternoon_trip_2 || '',
+    afternoon_trip_3: payload.afternoon_trip_3 || '',
+    note: payload.note || '',
+    calendar_label: payload.calendar_label || ''
+  })
+}

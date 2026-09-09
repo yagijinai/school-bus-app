@@ -9,7 +9,13 @@ import type {
   SchoolTimetableRow,
   UserPermissionRow
 } from '../types/spreadsheet'
-import { fetchSpreadsheetMaster, saveReservationToSheet, saveBasicSettingToSheet } from '../lib/spreadsheetApi'
+import { 
+  fetchSpreadsheetMaster, 
+  saveReservationToSheet, 
+  saveBasicSettingToSheet,
+  saveGuardianMasterToSheet,
+  saveSchoolTimetableToSheet
+} from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
 if (typeof window !== 'undefined') {
@@ -39,6 +45,8 @@ interface AppContextType {
   refreshAll: () => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveBasicSetting: (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveGuardianMaster: (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveSchoolTimetable: (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -180,6 +188,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
+  // 生徒・保護者マスターの保存
+  const handleSaveGuardianMaster = async (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const res = await saveGuardianMasterToSheet(payload)
+      if (res.success) {
+        setData(prev => {
+          const targetEmail = payload.parent_email.trim().toLowerCase()
+          const updated = prev.guardianMaster.map(g => {
+            if (g.parent_email.toLowerCase() === targetEmail) {
+              return {
+                ...g,
+                student_name_1: payload.student_name_1 !== undefined ? payload.student_name_1 : g.student_name_1,
+                student_name_2: payload.student_name_2 !== undefined ? payload.student_name_2 : g.student_name_2,
+                student_name_3: payload.student_name_3 !== undefined ? payload.student_name_3 : g.student_name_3,
+                student_name_4: payload.student_name_4 !== undefined ? payload.student_name_4 : g.student_name_4,
+                bus_stop_name: payload.bus_stop_name || g.bus_stop_name,
+                note: payload.note !== undefined ? payload.note : g.note,
+                default_morning: payload.default_morning !== undefined ? payload.default_morning : g.default_morning,
+                default_afternoon: payload.default_afternoon !== undefined ? payload.default_afternoon : g.default_afternoon
+              }
+            }
+            return g
+          })
+          return { ...prev, guardianMaster: updated }
+        })
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 学校用時刻表の保存
+  const handleSaveSchoolTimetable = async (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const res = await saveSchoolTimetableToSheet(payload)
+      if (res.success) {
+        setData(prev => {
+          const targetDate = payload.date.replace(/-/g, '/')
+          const exists = prev.schoolTimetable.some(t => t.date.replace(/-/g, '/') === targetDate)
+          let updated: SchoolTimetableRow[]
+          if (exists) {
+            updated = prev.schoolTimetable.map(t => {
+              if (t.date.replace(/-/g, '/') === targetDate) {
+                return {
+                  ...t,
+                  morning_trip: payload.morning_trip !== undefined ? payload.morning_trip : t.morning_trip,
+                  afternoon_trip_1: payload.afternoon_trip_1 !== undefined ? payload.afternoon_trip_1 : t.afternoon_trip_1,
+                  afternoon_trip_2: payload.afternoon_trip_2 !== undefined ? payload.afternoon_trip_2 : t.afternoon_trip_2,
+                  afternoon_trip_3: payload.afternoon_trip_3 !== undefined ? payload.afternoon_trip_3 : t.afternoon_trip_3,
+                  note: payload.note !== undefined ? payload.note : t.note,
+                  calendar_label: payload.calendar_label !== undefined ? payload.calendar_label : t.calendar_label
+                }
+              }
+              return t
+            })
+          } else {
+            updated = [
+              ...prev.schoolTimetable,
+              {
+                date: targetDate,
+                morning_trip: payload.morning_trip || '',
+                afternoon_trip_1: payload.afternoon_trip_1 || '',
+                afternoon_trip_2: payload.afternoon_trip_2 || '',
+                afternoon_trip_3: payload.afternoon_trip_3 || '',
+                note: payload.note || '',
+                calendar_label: payload.calendar_label || ''
+              }
+            ]
+          }
+          return { ...prev, schoolTimetable: updated }
+        })
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   return (
     <AppContext.Provider
       value={{
@@ -197,7 +288,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         refreshAll,
         saveReservation: handleSaveReservation,
-        saveBasicSetting: handleSaveBasicSetting
+        saveBasicSetting: handleSaveBasicSetting,
+        saveGuardianMaster: handleSaveGuardianMaster,
+        saveSchoolTimetable: handleSaveSchoolTimetable
       }}
     >
       {children}

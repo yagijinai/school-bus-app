@@ -99,6 +99,8 @@ function handleRequest(params, method) {
         return createJsonResponse(saveBasicSettingToSheet(params));
       case 'getSchoolTimetable':
         return createJsonResponse(getSchoolTimetableFromSheet());
+      case 'saveSchoolTimetable':
+        return createJsonResponse(saveSchoolTimetableToSheet(params));
       case 'getUserPermissions':
         return createJsonResponse(getUserPermissionsFromSheet());
       case 'verifyStudent':
@@ -799,6 +801,71 @@ function saveBasicSettingToSheet(params) {
       action: 'inserted',
       row: sheet.getLastRow(),
       setting_name: settingName
+    };
+  }
+}
+
+/**
+ * 14. 学校用時刻表の保存・更新（管理者限定）
+ * A列（日付: YYYY/MM/DD）をキーに検索し、B〜G列（登校便、下校1〜3便、備考、カレンダー表示用）を上書き更新
+ */
+function saveSchoolTimetableToSheet(params) {
+  const dateStr = formatDateToSlash(params.date || params['日付'] || '');
+  if (!dateStr) {
+    return { status: 'error', message: '日付（A列）が指定されていません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('学校用時刻表');
+  if (!sheet) {
+    sheet = ss.insertSheet('学校用時刻表');
+    sheet.appendRow(['日付', '登校便', '下校1便', '下校2便', '下校3便', '備考', 'カレンダー表示用']);
+  }
+
+  const morningTrip = String(params.morning_trip || params['登校便'] || '').trim();
+  const trip1 = String(params.afternoon_trip_1 || params.trip_1 || params['下校1便'] || '').trim();
+  const trip2 = String(params.afternoon_trip_2 || params.trip_2 || params['下校2便'] || '').trim();
+  const trip3 = String(params.afternoon_trip_3 || params.trip_3 || params['下校3便'] || '').trim();
+  const note = String(params.note || params['備考'] || '').trim();
+  const calendarDisplay = String(params.calendar_label || params.calendar_display || params['カレンダー表示用'] || '').trim();
+
+  const lastRow = sheet.getLastRow();
+  let targetRow = -1;
+
+  if (lastRow >= 2) {
+    const dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < dates.length; i++) {
+      if (formatDateToSlash(dates[i][0]) === dateStr) {
+        targetRow = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (targetRow > 0) {
+    sheet.getRange(targetRow, 2, 1, 6).setValues([[
+      morningTrip,
+      trip1,
+      trip2,
+      trip3,
+      note,
+      calendarDisplay
+    ]]);
+    return {
+      status: 'success',
+      message: '学校用時刻表を更新しました',
+      action: 'updated',
+      row: targetRow,
+      date: dateStr
+    };
+  } else {
+    sheet.appendRow([dateStr, morningTrip, trip1, trip2, trip3, note, calendarDisplay]);
+    return {
+      status: 'success',
+      message: '学校用時刻表に新規追加しました',
+      action: 'inserted',
+      row: sheet.getLastRow(),
+      date: dateStr
     };
   }
 }
