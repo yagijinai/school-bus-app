@@ -349,7 +349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSyncing(true)
     try {
       const res = await registerNewStudentWithCodeToSheet(payload)
-      if (res.success) {
+      if (res.success || res.status === 'success') {
         await refreshAll()
       }
       return res
@@ -363,7 +363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSyncing(true)
     try {
       const res = await linkStudentWithCodeToSheet(payload)
-      if (res.success) {
+      if (res.success || res.status === 'success') {
         const fresh = await fetchSpreadsheetMaster()
         setData(fresh)
         // ログイン状態をセット/更新

@@ -124,7 +124,7 @@ async function sendGASGet<T>(params: Record<string, string>): Promise<{ success:
 /**
  * GAS POSTリクエスト送信（CORS対策 text/plain）
  */
-async function sendGASPost<T>(body: any): Promise<{ success: boolean; data?: T; message?: string }> {
+async function sendGASPost<T>(body: any): Promise<{ success: boolean; data?: T; message?: string; status?: string; code?: string; auth_code?: string; [key: string]: any }> {
   try {
     const res = await fetch(GAS_API_URL, {
       method: 'POST',
@@ -135,14 +135,17 @@ async function sendGASPost<T>(body: any): Promise<{ success: boolean; data?: T; 
       throw new Error(`HTTP Error: ${res.status}`)
     }
     const json = await res.json()
+    const isSuccess = json.status === 'success' || json.success === true
     return {
-      success: json.status === 'success' || json.success === true,
+      ...json,
+      success: isSuccess,
+      status: json.status || (isSuccess ? 'success' : 'error'),
       data: json.data || json,
       message: json.message
     }
   } catch (err: any) {
     console.error(`[GAS POST ${body.action}] Error:`, err)
-    return { success: false, message: err.message }
+    return { success: false, status: 'error', message: err.message }
   }
 }
 
@@ -403,7 +406,7 @@ export async function registerNewStudentWithCodeToSheet(payload: {
   student_name: string
   bus_stop_name?: string
   note?: string
-}): Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }> {
+}): Promise<{ success: boolean; status?: string; message?: string; code?: string; auth_code?: string; student_name?: string; [key: string]: any }> {
   return sendGASPost({
     action: 'registerNewStudentWithCode',
     student_name: payload.student_name.trim(),
@@ -418,7 +421,7 @@ export async function registerNewStudentWithCodeToSheet(payload: {
 export async function linkStudentWithCodeToSheet(payload: {
   email: string
   code: string
-}): Promise<{ success: boolean; message?: string; student_name?: string; is_sibling?: boolean }> {
+}): Promise<{ success: boolean; status?: string; message?: string; student_name?: string; is_sibling?: boolean; [key: string]: any }> {
   return sendGASPost({
     action: 'linkStudentWithCode',
     email: payload.email.trim().toLowerCase(),

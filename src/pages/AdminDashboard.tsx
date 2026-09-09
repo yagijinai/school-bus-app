@@ -193,8 +193,8 @@ export const AdminDashboard: React.FC = () => {
     note: ''
   })
   const [isRegisteringStudent, setIsRegisteringStudent] = useState(false)
-  const [newStudentIssuedCode, setNewStudentIssuedCode] = useState<{ code: string; name: string } | null>(null)
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [successToast, setSuccessToast] = useState<{ message: string; code?: string } | null>(null)
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code)
@@ -210,23 +210,42 @@ export const AdminDashboard: React.FC = () => {
     }
     setIsRegisteringStudent(true)
     try {
-      const res = await registerNewStudentWithCode({
+      const res: any = await registerNewStudentWithCode({
         student_name: newStudentDraft.name.trim(),
         bus_stop_name: newStudentDraft.bus_stop_name || (busStops[0]?.name || '高山研修所前'),
         note: newStudentDraft.note.trim()
       })
-      if (res.success && res.code) {
-        setNewStudentIssuedCode({
-          code: res.code,
-          name: newStudentDraft.name.trim()
-        })
+
+      // GASからの返り値（status === 'success' または success === true）を確実に判定
+      const isSuccess = res.status === 'success' || res.success === true || (res.data && (res.data.status === 'success' || res.data.success === true))
+      const code = res.code || res.auth_code || res.data?.code || res.data?.auth_code || ''
+
+      if (isSuccess) {
+        // 1. 登録ウィンドウ（モーダル）を自動的に閉じる
+        setIsAddStudentModalOpen(false)
+
+        // 2. フォームの入力値をリセット
         setNewStudentDraft({
           name: '',
           bus_stop_name: busStops[0]?.name || '',
           note: ''
         })
+
+        // 3. 成功トーストを表示（「登録を失敗しました」の誤表示を完全排除）
+        const toastMsg = code
+          ? `新入生を登録し、認証コードを発行しました（コード: ${code}）`
+          : '新入生を登録し、認証コードを発行しました'
+        setSuccessToast({
+          message: toastMsg,
+          code: code
+        })
+
+        // 6秒後に自動非表示
+        setTimeout(() => {
+          setSuccessToast(null)
+        }, 6000)
       } else {
-        alert(`登録に失敗しました: ${res.message}`)
+        alert(`登録に失敗しました: ${res.message || 'エラーが発生しました'}`)
       }
     } finally {
       setIsRegisteringStudent(false)
@@ -589,7 +608,54 @@ export const AdminDashboard: React.FC = () => {
 
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 space-y-6 max-w-7xl mx-auto relative">
+      {/* 成功トースト通知（画面上部固定・コードコピー機能付き） */}
+      {successToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92%] animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="p-4 bg-slate-900 border-2 border-emerald-500/80 rounded-2xl shadow-2xl shadow-black/80 flex items-center justify-between gap-3 text-white">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl shrink-0">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-black text-emerald-300">新入生登録完了</div>
+                <div className="text-xs text-slate-200 font-bold truncate sm:whitespace-normal">
+                  {successToast.message}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {successToast.code && (
+                <button
+                  type="button"
+                  onClick={() => handleCopyCode(successToast.code!)}
+                  className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded-xl text-xs flex items-center gap-1.5 border border-amber-500/30 transition-all cursor-pointer"
+                >
+                  {copiedCode === successToast.code ? (
+                    <>
+                      <Check className="h-3.5 w-3.5 text-emerald-400" />
+                      コピー済
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" />
+                      コードコピー
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSuccessToast(null)}
+                className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 上部ヘッダー */}
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl">
         <div className="flex items-center gap-3">
@@ -1186,7 +1252,6 @@ export const AdminDashboard: React.FC = () => {
                   bus_stop_name: busStops[0]?.name || '',
                   note: ''
                 })
-                setNewStudentIssuedCode(null)
                 setIsAddStudentModalOpen(true)
               }}
               className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs rounded-2xl flex items-center gap-2 transition-all shadow-lg shadow-indigo-600/20 self-start sm:self-auto shrink-0"
@@ -2101,141 +2166,86 @@ export const AdminDashboard: React.FC = () => {
               </h3>
               <button
                 type="button"
-                onClick={() => {
-                  setIsAddStudentModalOpen(false)
-                  setNewStudentIssuedCode(null)
-                }}
-                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all"
+                onClick={() => setIsAddStudentModalOpen(false)}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            {newStudentIssuedCode ? (
-              /* 発行完了ビュー */
-              <div className="space-y-4 py-2">
-                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl text-center space-y-2">
-                  <div className="inline-flex p-2 bg-emerald-500/20 rounded-full text-emerald-400">
-                    <CheckCircle2 className="h-6 w-6" />
-                  </div>
-                  <h4 className="text-sm font-bold text-white">
-                    新入生「{newStudentIssuedCode.name}」を登録しました
-                  </h4>
-                  <p className="text-xs text-slate-400">
-                    以下の認証コードを保護者の方へお伝えください。
-                  </p>
-                  <div className="pt-2">
-                    <div className="inline-flex items-center gap-2 bg-slate-950 px-4 py-2.5 rounded-xl border border-amber-500/40 shadow-inner">
-                      <span className="font-mono text-xl font-black text-amber-300 tracking-wider">
-                        {newStudentIssuedCode.code}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyCode(newStudentIssuedCode.code)}
-                        className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded-lg text-xs flex items-center gap-1 transition-colors"
-                      >
-                        {copiedCode === newStudentIssuedCode.code ? (
-                          <>
-                            <Check className="h-3.5 w-3.5 text-emerald-400" />
-                            コピー済
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="h-3.5 w-3.5" />
-                            コピー
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+            {/* 入力フォーム */}
+            <form onSubmit={handleRegisterNewStudent} className="space-y-4">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                生徒名とバス停を登録すると、自動的に専用の認証コード（例: SB-7829）が発行されスプレッドシート（J列）に保存されます。
+              </p>
 
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  生徒名（氏名） <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newStudentDraft.name}
+                  onChange={(e) => setNewStudentDraft(prev => ({ ...prev, name: e.target.value }))}
+                  placeholder="例: 山田 太郎"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-sm font-bold text-white placeholder:text-slate-600 outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  登録バス停名
+                </label>
+                <select
+                  value={newStudentDraft.bus_stop_name}
+                  onChange={(e) => setNewStudentDraft(prev => ({ ...prev, bus_stop_name: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-xs font-bold text-amber-300 outline-none cursor-pointer"
+                >
+                  {busStops.map(b => (
+                    <option key={b.name} value={b.name}>{b.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  備考 (G列)
+                </label>
+                <input
+                  type="text"
+                  value={newStudentDraft.note}
+                  onChange={(e) => setNewStudentDraft(prev => ({ ...prev, note: e.target.value }))}
+                  placeholder="例: 2026年度新入生、1年A組"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-xs text-slate-300 placeholder:text-slate-600 outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsAddStudentModalOpen(false)
-                    setNewStudentIssuedCode(null)
-                  }}
-                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition-all"
+                  onClick={() => setIsAddStudentModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all cursor-pointer"
                 >
-                  閉じる
+                  キャンセル
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRegisteringStudent}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 disabled:opacity-50 cursor-pointer"
+                >
+                  {isRegisteringStudent ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 animate-spin" /> 登録中...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="h-4 w-4" /> 登録して認証コードを発行
+                    </>
+                  )}
                 </button>
               </div>
-            ) : (
-              /* 入力フォーム */
-              <form onSubmit={handleRegisterNewStudent} className="space-y-4">
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  生徒名とバス停を登録すると、自動的に専用の認証コード（例: SB-7829）が発行されスプレッドシート（J列）に保存されます。
-                </p>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 block">
-                    生徒名（氏名） <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={newStudentDraft.name}
-                    onChange={(e) => setNewStudentDraft(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder="例: 山田 太郎"
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-sm font-bold text-white placeholder:text-slate-600 outline-none"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 block">
-                    登録バス停名
-                  </label>
-                  <select
-                    value={newStudentDraft.bus_stop_name}
-                    onChange={(e) => setNewStudentDraft(prev => ({ ...prev, bus_stop_name: e.target.value }))}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-xs font-bold text-amber-300 outline-none cursor-pointer"
-                  >
-                    {busStops.map(b => (
-                      <option key={b.name} value={b.name}>{b.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-300 block">
-                    備考 (G列)
-                  </label>
-                  <input
-                    type="text"
-                    value={newStudentDraft.note}
-                    onChange={(e) => setNewStudentDraft(prev => ({ ...prev, note: e.target.value }))}
-                    placeholder="例: 2026年度新入生、1年A組"
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-xs text-slate-300 placeholder:text-slate-600 outline-none"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setIsAddStudentModalOpen(false)}
-                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all"
-                  >
-                    キャンセル
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isRegisteringStudent}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-indigo-600/20 disabled:opacity-50"
-                  >
-                    {isRegisteringStudent ? (
-                      <>
-                        <RefreshCw className="h-4 w-4 animate-spin" /> 登録中...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="h-4 w-4" /> 登録して認証コードを発行
-                      </>
-                    )}
-                  </button>
-                </div>
-              </form>
-            )}
+            </form>
           </div>
         </div>
       )}
