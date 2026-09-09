@@ -20,7 +20,7 @@ export const AdminDashboard: React.FC = () => {
     syncing, refreshAll 
   } = useApp()
 
-  const [activeTab, setActiveTab] = useState<'basicSettings' | 'schedules' | 'guardians' | 'timetable' | 'stops'>('basicSettings')
+  const [activeTab, setActiveTab] = useState<'schedules' | 'timetable' | 'guardians' | 'stops' | 'basicSettings'>('schedules')
 
   // ==========================================
   // 1. 基本設定インラインドラフト用状態
@@ -83,6 +83,8 @@ export const AdminDashboard: React.FC = () => {
 
   const [selectedDate, setSelectedDate] = useState<string>(getTodaySlash)
   const [isAllDates, setIsAllDates] = useState<boolean>(false)
+  // 便別絞り込みフィルター（集計カードクリック連動）
+  const [selectedTripFilter, setSelectedTripFilter] = useState<'all' | 'morning' | 'trip1' | 'trip2' | 'trip3' | 'notRiding'>('all')
 
   // 生徒名から登録バス停を引くマップ
   const studentBusStopMap = useMemo(() => {
@@ -95,14 +97,14 @@ export const AdminDashboard: React.FC = () => {
     return map
   }, [guardianMaster])
 
-  // 絞り込み済み運行予定
-  const filteredSchedules = useMemo(() => {
+  // 日付で絞り込まれた運行予定（集計カードの計算母体）
+  const dateFilteredSchedules = useMemo(() => {
     if (isAllDates) return schedules
     const target = selectedDate.replace(/-/g, '/')
     return schedules.filter(s => s.date.replace(/-/g, '/') === target)
   }, [schedules, isAllDates, selectedDate])
 
-  // リアルタイム集計
+  // リアルタイム集計（日付内の各便人数）
   const summaryCounts = useMemo(() => {
     let morningCount = 0
     let trip1Count = 0
@@ -110,7 +112,7 @@ export const AdminDashboard: React.FC = () => {
     let trip3Count = 0
     let notRidingCount = 0
 
-    filteredSchedules.forEach(row => {
+    dateFilteredSchedules.forEach(row => {
       if (row.morning_status === '乗る') {
         morningCount++
       }
@@ -129,9 +131,30 @@ export const AdminDashboard: React.FC = () => {
       trip2Count,
       trip3Count,
       notRidingCount,
-      totalReservations: filteredSchedules.length
+      totalReservations: dateFilteredSchedules.length
     }
-  }, [filteredSchedules])
+  }, [dateFilteredSchedules])
+
+  // 便別フィルターで絞り込まれた一覧表示用データ
+  const filteredSchedules = useMemo(() => {
+    if (selectedTripFilter === 'all') return dateFilteredSchedules
+    if (selectedTripFilter === 'morning') {
+      return dateFilteredSchedules.filter(s => s.morning_status === '乗る')
+    }
+    if (selectedTripFilter === 'trip1') {
+      return dateFilteredSchedules.filter(s => s.afternoon_status !== '乗らない' && !!s.afternoon_trip_1)
+    }
+    if (selectedTripFilter === 'trip2') {
+      return dateFilteredSchedules.filter(s => s.afternoon_status !== '乗らない' && !!s.afternoon_trip_2)
+    }
+    if (selectedTripFilter === 'trip3') {
+      return dateFilteredSchedules.filter(s => s.afternoon_status !== '乗らない' && !!s.afternoon_trip_3)
+    }
+    if (selectedTripFilter === 'notRiding') {
+      return dateFilteredSchedules.filter(s => s.afternoon_status === '乗らない')
+    }
+    return dateFilteredSchedules
+  }, [dateFilteredSchedules, selectedTripFilter])
 
   // ==========================================
   // 3. 生徒・保護者マスター インライン編集
@@ -739,18 +762,6 @@ export const AdminDashboard: React.FC = () => {
       <div className="flex items-center gap-2 overflow-x-auto border-b border-slate-850 pb-2">
         <button
           type="button"
-          onClick={() => setActiveTab('basicSettings')}
-          className={`px-4 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'basicSettings'
-              ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/15'
-              : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-          }`}
-        >
-          <FileSpreadsheet className="h-4 w-4" />
-          基本設定・運休期間マスタ ({basicSettings.length}件)
-        </button>
-        <button
-          type="button"
           onClick={() => setActiveTab('schedules')}
           className={`px-4 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
             activeTab === 'schedules'
@@ -759,19 +770,7 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <Calendar className="h-4 w-4" />
-          運行予定カレンダー一覧 ({schedules.length}件)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('guardians')}
-          className={`px-4 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'guardians'
-              ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/15'
-              : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
-          }`}
-        >
-          <Users className="h-4 w-4" />
-          生徒・保護者マスター ({guardianMaster.length}世帯)
+          運行予定カレンダー一覧
         </button>
         <button
           type="button"
@@ -783,7 +782,19 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <Clock className="h-4 w-4" />
-          学校用時刻表マスタ ({schoolTimetable.length}日分)
+          学校用時刻表マスタ
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('guardians')}
+          className={`px-4 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+            activeTab === 'guardians'
+              ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/15'
+              : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+          }`}
+        >
+          <Users className="h-4 w-4" />
+          生徒・保護者マスター
         </button>
         <button
           type="button"
@@ -795,7 +806,19 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <MapPin className="h-4 w-4" />
-          バス停マスタ ({busStops.length}停留所)
+          バス停マスタ
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('basicSettings')}
+          className={`px-4 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+            activeTab === 'basicSettings'
+              ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/15'
+              : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+          }`}
+        >
+          <FileSpreadsheet className="h-4 w-4" />
+          基本設定・運休期間マスタ
         </button>
       </div>
 
@@ -1104,9 +1127,12 @@ export const AdminDashboard: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => setIsAllDates(true)}
+                onClick={() => {
+                  setIsAllDates(true)
+                  setSelectedTripFilter('all')
+                }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  isAllDates
+                  isAllDates && selectedTripFilter === 'all'
                     ? 'bg-indigo-600 text-white shadow-md'
                     : 'bg-slate-950 text-slate-300 hover:bg-slate-800 border border-slate-800'
                 }`}
@@ -1129,72 +1155,180 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* 運行便ごとのリアルタイム集計カード */}
+          {/* 運行便ごとのリアルタイム集計カード（クリックで名簿絞り込み連動） */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-400">
-                {isAllDates ? '【全期間集計】' : `【${selectedDate} 集計】`}
-              </span>
-              <span className="text-xs font-mono text-slate-500">
-                該当予約: {summaryCounts.totalReservations}件
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-400">
+                  {isAllDates ? '【全期間集計】' : `【${selectedDate} 集計】`}
+                </span>
+                {selectedTripFilter !== 'all' && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold animate-in fade-in duration-150">
+                    <span>
+                      絞込中: {
+                        selectedTripFilter === 'morning' ? '🌅 登校便' :
+                        selectedTripFilter === 'trip1' ? '🚌 下校1便' :
+                        selectedTripFilter === 'trip2' ? '🚍 下校2便' :
+                        selectedTripFilter === 'trip3' ? '🌙 下校3便' : '🚫 下校乗らない'
+                      }（{filteredSchedules.length}名）
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTripFilter('all')}
+                      className="hover:text-white p-0.5"
+                      title="フィルター解除"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {selectedTripFilter !== 'all' && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTripFilter('all')}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-bold underline transition-colors"
+                  >
+                    全生徒表示に戻す
+                  </button>
+                )}
+                <span className="text-xs font-mono text-slate-500">
+                  対象予約: {filteredSchedules.length} / {summaryCounts.totalReservations}件
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {/* 登校便 */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between shadow-sm">
-                <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
-                  🌅 登校便
-                </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTripFilter(prev => prev === 'morning' ? 'all' : 'morning')}
+                className={`text-left rounded-2xl p-3.5 flex flex-col justify-between transition-all cursor-pointer shadow-sm relative group ${
+                  selectedTripFilter === 'morning'
+                    ? 'bg-amber-500/20 border-2 border-amber-400 ring-2 ring-amber-400/30 shadow-amber-500/10'
+                    : 'bg-slate-950/80 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] font-bold text-amber-400 flex items-center gap-1">
+                    🌅 登校便
+                  </span>
+                  {selectedTripFilter === 'morning' && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-400 text-slate-950 font-black">
+                      選択中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-white">{summaryCounts.morningCount}</span>
                   <span className="text-xs text-slate-400">名</span>
                 </div>
-              </div>
+              </button>
 
               {/* 下校1便 */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between shadow-sm">
-                <span className="text-[11px] font-bold text-sky-400 flex items-center gap-1">
-                  🚌 下校1便
-                </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTripFilter(prev => prev === 'trip1' ? 'all' : 'trip1')}
+                className={`text-left rounded-2xl p-3.5 flex flex-col justify-between transition-all cursor-pointer shadow-sm relative group ${
+                  selectedTripFilter === 'trip1'
+                    ? 'bg-sky-500/20 border-2 border-sky-400 ring-2 ring-sky-400/30 shadow-sky-500/10'
+                    : 'bg-slate-950/80 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] font-bold text-sky-400 flex items-center gap-1">
+                    🚌 下校1便
+                  </span>
+                  {selectedTripFilter === 'trip1' && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-sky-400 text-slate-950 font-black">
+                      選択中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-white">{summaryCounts.trip1Count}</span>
                   <span className="text-xs text-slate-400">名</span>
                 </div>
-              </div>
+              </button>
 
               {/* 下校2便 */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between shadow-sm">
-                <span className="text-[11px] font-bold text-indigo-400 flex items-center gap-1">
-                  🚍 下校2便
-                </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTripFilter(prev => prev === 'trip2' ? 'all' : 'trip2')}
+                className={`text-left rounded-2xl p-3.5 flex flex-col justify-between transition-all cursor-pointer shadow-sm relative group ${
+                  selectedTripFilter === 'trip2'
+                    ? 'bg-indigo-500/20 border-2 border-indigo-400 ring-2 ring-indigo-400/30 shadow-indigo-500/10'
+                    : 'bg-slate-950/80 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] font-bold text-indigo-400 flex items-center gap-1">
+                    🚍 下校2便
+                  </span>
+                  {selectedTripFilter === 'trip2' && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-400 text-slate-950 font-black">
+                      選択中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-white">{summaryCounts.trip2Count}</span>
                   <span className="text-xs text-slate-400">名</span>
                 </div>
-              </div>
+              </button>
 
               {/* 下校3便 */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between shadow-sm">
-                <span className="text-[11px] font-bold text-purple-400 flex items-center gap-1">
-                  🌙 下校3便
-                </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTripFilter(prev => prev === 'trip3' ? 'all' : 'trip3')}
+                className={`text-left rounded-2xl p-3.5 flex flex-col justify-between transition-all cursor-pointer shadow-sm relative group ${
+                  selectedTripFilter === 'trip3'
+                    ? 'bg-purple-500/20 border-2 border-purple-400 ring-2 ring-purple-400/30 shadow-purple-500/10'
+                    : 'bg-slate-950/80 border border-slate-800 hover:border-purple-500/50 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] font-bold text-purple-400 flex items-center gap-1">
+                    🌙 下校3便
+                  </span>
+                  {selectedTripFilter === 'trip3' && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-400 text-slate-950 font-black">
+                      選択中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-white">{summaryCounts.trip3Count}</span>
                   <span className="text-xs text-slate-400">名</span>
                 </div>
-              </div>
+              </button>
 
               {/* 下校乗らない */}
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between shadow-sm col-span-2 sm:col-span-1">
-                <span className="text-[11px] font-bold text-rose-400 flex items-center gap-1">
-                  🚫 下校乗らない
-                </span>
+              <button
+                type="button"
+                onClick={() => setSelectedTripFilter(prev => prev === 'notRiding' ? 'all' : 'notRiding')}
+                className={`text-left rounded-2xl p-3.5 flex flex-col justify-between transition-all cursor-pointer shadow-sm col-span-2 sm:col-span-1 relative group ${
+                  selectedTripFilter === 'notRiding'
+                    ? 'bg-rose-500/20 border-2 border-rose-400 ring-2 ring-rose-400/30 shadow-rose-500/10'
+                    : 'bg-slate-950/80 border border-slate-800 hover:border-rose-500/50 hover:bg-slate-900/80'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-[11px] font-bold text-rose-400 flex items-center gap-1">
+                    🚫 下校乗らない
+                  </span>
+                  {selectedTripFilter === 'notRiding' && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-rose-400 text-slate-950 font-black">
+                      選択中
+                    </span>
+                  )}
+                </div>
                 <div className="mt-2 flex items-baseline gap-1">
                   <span className="text-2xl font-black text-white">{summaryCounts.notRidingCount}</span>
                   <span className="text-xs text-slate-400">名</span>
                 </div>
-              </div>
+              </button>
             </div>
           </div>
 
@@ -1554,12 +1688,17 @@ export const AdminDashboard: React.FC = () => {
                 {/* 各日付セル */}
                 {calendarDays.map((day, idx) => {
                   const data = timetableMap.get(day.dateStr)
-                  const hasMorning = !!data?.morning_trip
-                  const hasTrip1 = !!data?.afternoon_trip_1
-                  const hasTrip2 = !!data?.afternoon_trip_2
-                  const hasTrip3 = !!data?.afternoon_trip_3
-                  const label = data?.calendar_label || ''
-                  const note = data?.note || ''
+                  const morningTime = (data?.morning_trip || '').trim()
+                  const trip1Time = (data?.afternoon_trip_1 || '').trim()
+                  const trip2Time = (data?.afternoon_trip_2 || '').trim()
+                  const trip3Time = (data?.afternoon_trip_3 || '').trim()
+
+                  const hasMorning = morningTime !== '' && morningTime !== '-'
+                  const hasTrip1 = trip1Time !== '' && trip1Time !== '-'
+                  const hasTrip2 = trip2Time !== '' && trip2Time !== '-'
+                  const hasTrip3 = trip3Time !== '' && trip3Time !== '-'
+                  const label = (data?.calendar_label || '').trim()
+                  const note = (data?.note || '').trim()
 
                   const isSun = day.dayOfWeek === 0
                   const isSat = day.dayOfWeek === 6
@@ -1568,7 +1707,7 @@ export const AdminDashboard: React.FC = () => {
                     <div
                       key={idx}
                       onClick={() => handleOpenTimetableModal(day.dateStr)}
-                      className={`min-h-[100px] md:min-h-[110px] p-2 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between group select-none ${
+                      className={`min-h-[105px] md:min-h-[120px] p-2 rounded-2xl border transition-all cursor-pointer flex flex-col justify-between group select-none ${
                         !day.isCurrentMonth
                           ? 'bg-slate-950/40 border-slate-900/60 opacity-40 hover:opacity-80'
                           : day.isToday
@@ -1599,28 +1738,38 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </div>
 
-                      {/* セル中央：運行便情報バッジ */}
+                      {/* セル中央：運行便情報バッジ（スプレッドシート値に基づく条件付き表示） */}
                       <div className="space-y-1 my-1">
-                        {hasMorning ? (
+                        {hasMorning && (
                           <div className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/20 truncate flex items-center justify-between">
                             <span>登校</span>
-                            <span>{formatTimeToHHmm(data?.morning_trip)}</span>
+                            <span>{formatTimeToHHmm(morningTime)}</span>
                           </div>
-                        ) : null}
+                        )}
 
-                        {(hasTrip1 || hasTrip2 || hasTrip3) ? (
+                        {hasTrip1 && (
                           <div className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/20 truncate flex items-center justify-between">
-                            <span>下校</span>
-                            <span>
-                              {hasTrip1 ? formatTimeToHHmm(data?.afternoon_trip_1) : ''}
-                              {hasTrip2 ? ` / ${formatTimeToHHmm(data?.afternoon_trip_2)}` : ''}
-                              {hasTrip3 ? ` / ${formatTimeToHHmm(data?.afternoon_trip_3)}` : ''}
-                            </span>
+                            <span>下校1</span>
+                            <span>{formatTimeToHHmm(trip1Time)}</span>
                           </div>
-                        ) : null}
+                        )}
+
+                        {hasTrip2 && (
+                          <div className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/20 truncate flex items-center justify-between">
+                            <span>下校2</span>
+                            <span>{formatTimeToHHmm(trip2Time)}</span>
+                          </div>
+                        )}
+
+                        {hasTrip3 && (
+                          <div className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/20 truncate flex items-center justify-between">
+                            <span>下校3</span>
+                            <span>{formatTimeToHHmm(trip3Time)}</span>
+                          </div>
+                        )}
 
                         {!hasMorning && !hasTrip1 && !hasTrip2 && !hasTrip3 && (
-                          <div className="text-[10px] text-slate-600 italic px-1 text-center py-1">
+                          <div className="text-[10px] text-slate-600 italic px-1 text-center py-1 truncate">
                             {note ? note : '未設定'}
                           </div>
                         )}
