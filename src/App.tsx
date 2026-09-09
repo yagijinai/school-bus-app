@@ -1,27 +1,24 @@
 import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './context/AuthContext'
-import { Login } from './pages/Login'
-import { RoleSelect } from './pages/RoleSelect'
-import { Dashboard as ParentDashboard } from './pages/parent/Dashboard'
-import { DriverDashboard } from './pages/driver/Dashboard'
-import { AdminDashboard } from './pages/admin/Dashboard'
+import { AppProvider, useApp } from './context/AppContext'
+import { LoginPage } from './pages/LoginPage'
+import { ParentDashboard } from './pages/ParentDashboard'
+import { AdminDashboard } from './pages/AdminDashboard'
+import { DriverDashboard } from './pages/DriverDashboard'
 import { Bus } from 'lucide-react'
 
-// 保護者用ダイレクトダッシュボードコンポーネント（直接描画）
-const DirectParentContainer: React.FC = () => {
-  return <ParentDashboard />
-}
-
-// 認証ガード
-const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles?: string[] }> = ({ children, allowedRoles }) => {
-  const { user, profile, loading } = useAuth()
+// 認証・ロールガード
+const ProtectedRoute: React.FC<{
+  children: React.ReactNode
+  allowedRoles?: ('管理者' | '運転手' | '保護者')[]
+}> = ({ children, allowedRoles }) => {
+  const { user, loading } = useApp()
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-white">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
-        <p className="mt-4 text-slate-400 text-sm">認証状態確認中...</p>
+      <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center text-white font-sans">
+        <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="mt-4 text-slate-300 font-bold tracking-wide">スプレッドシートデータ取得中...</p>
       </div>
     )
   }
@@ -30,41 +27,51 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles?: strin
     return <Navigate to="/login" replace />
   }
 
-  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
-    if (profile.role === 'driver') return <Navigate to="/driver/dashboard" replace />
-    if (profile.role === 'admin') return <Navigate to="/admin/dashboard" replace />
-    return <DirectParentContainer />
+  if (allowedRoles && !allowedRoles.includes(user.role)) {
+    if (user.role === '管理者') return <Navigate to="/admin" replace />
+    if (user.role === '運転手') return <Navigate to="/driver" replace />
+    return <Navigate to="/parent" replace />
   }
 
   return <>{children}</>
 }
 
-// パブリックルート（固定仕様：起動時は自動遷移させず二択画面を常に表示）
-const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { loading } = useAuth()
-  if (loading) return null
+// 認証済みならダッシュボードへリダイレクト
+const PublicOnlyRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, loading } = useApp()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center text-white font-sans">
+        <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="mt-4 text-slate-300 font-bold tracking-wide">スプレッドシート同期中...</p>
+      </div>
+    )
+  }
+
+  if (user) {
+    if (user.role === '管理者') return <Navigate to="/admin" replace />
+    if (user.role === '運転手') return <Navigate to="/driver" replace />
+    return <Navigate to="/parent" replace />
+  }
+
   return <>{children}</>
 }
 
 const AppRoutes: React.FC = () => {
-  const { user, loading } = useAuth()
+  const { user, loading } = useApp()
 
-  // 画面描画最優先ローディングロック（OAuthリダイレクトおよび初期認証確認が100%完了するまで全ルートを完全ロック）
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center text-white font-sans p-4 select-none">
-        <div className="relative">
-          <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-amber-500 via-indigo-500 to-purple-600 p-0.5 animate-spin">
-            <div className="w-full h-full bg-slate-950 rounded-3xl flex items-center justify-center">
-              <Bus className="h-7 w-7 text-amber-400 animate-pulse" />
-            </div>
-          </div>
+      <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center text-white font-sans p-4">
+        <div className="w-14 h-14 bg-emerald-600 rounded-2xl flex items-center justify-center shadow-lg animate-pulse">
+          <Bus className="w-8 h-8 text-white" />
         </div>
-        <p className="mt-5 text-base font-black text-slate-100 tracking-wide">
-          認証・運行データ同期中...
+        <p className="mt-4 text-base font-bold text-slate-100">
+          スクールバス運行管理システム
         </p>
-        <p className="mt-1.5 text-xs text-slate-400">
-          Googleアカウント照合およびスプレッドシート連携を実行しています
+        <p className="mt-1 text-xs text-slate-400">
+          Googleスプレッドシートより最新データを取得しています...
         </p>
       </div>
     )
@@ -72,68 +79,80 @@ const AppRoutes: React.FC = () => {
 
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
-      
-      {/* Google認証後のロール（役割）選択画面 */}
-      <Route 
-        path="/select-role" 
+      <Route
+        path="/login"
         element={
-          <ProtectedRoute>
-            <RoleSelect />
-          </ProtectedRoute>
-        } 
-      />
-      
-      {/* 保護者ダッシュボード */}
-      <Route 
-        path="/parent/dashboard" 
-        element={
-          <ProtectedRoute allowedRoles={['parent']}>
-            <DirectParentContainer />
-          </ProtectedRoute>
-        } 
+          <PublicOnlyRoute>
+            <LoginPage />
+          </PublicOnlyRoute>
+        }
       />
 
-      <Route path="/parent" element={<Navigate to="/parent/dashboard" replace />} />
-      <Route path="/register" element={<Navigate to="/parent/dashboard" replace />} />
-      <Route path="/verify" element={<Navigate to="/parent/dashboard" replace />} />
-      
-      <Route 
-        path="/driver/dashboard" 
+      {/* 保護者画面 */}
+      <Route
+        path="/parent"
         element={
-          <ProtectedRoute allowedRoles={['driver']}>
-            <DriverDashboard />
+          <ProtectedRoute allowedRoles={['保護者', '管理者']}>
+            <ParentDashboard />
           </ProtectedRoute>
-        } 
+        }
       />
-      
-      <Route 
-        path="/admin/dashboard" 
+
+      {/* 管理者画面 */}
+      <Route
+        path="/admin"
         element={
-          <ProtectedRoute allowedRoles={['admin']}>
+          <ProtectedRoute allowedRoles={['管理者']}>
             <AdminDashboard />
           </ProtectedRoute>
-        } 
+        }
       />
 
-      <Route 
-        path="*" 
+      {/* 運転手画面 */}
+      <Route
+        path="/driver"
         element={
-          user ? <Navigate to="/parent/dashboard" replace /> : <Navigate to="/login" replace />
-        } 
+          <ProtectedRoute allowedRoles={['運転手', '管理者']}>
+            <DriverDashboard />
+          </ProtectedRoute>
+        }
       />
+
+      {/* 旧URL互換リダイレクト */}
+      <Route path="/parent/dashboard" element={<Navigate to="/parent" replace />} />
+      <Route path="/admin/dashboard" element={<Navigate to="/admin" replace />} />
+      <Route path="/driver/dashboard" element={<Navigate to="/driver" replace />} />
+
+      {/* ルートURL: ロールに応じて自動分岐 */}
+      <Route
+        path="/"
+        element={
+          user ? (
+            user.role === '管理者' ? (
+              <Navigate to="/admin" replace />
+            ) : user.role === '運転手' ? (
+              <Navigate to="/driver" replace />
+            ) : (
+              <Navigate to="/parent" replace />
+            )
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }
 
-const App: React.FC = () => {
+export const App: React.FC = () => {
   return (
-    <AuthProvider>
+    <AppProvider>
       <Router>
         <AppRoutes />
       </Router>
-    </AuthProvider>
+    </AppProvider>
   )
 }
 
