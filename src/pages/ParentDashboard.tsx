@@ -6,8 +6,9 @@ import {
   Plus, UserPlus, AlertCircle, X, Calendar, CalendarDays, Sparkles, Check,
   Lock, Circle
 } from 'lucide-react'
-import { toSlashDate, toHyphenDate, formatTimeToHHmm, formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
+import { toSlashDate, toHyphenDate, formatTimeToHHmm, isMonthPublished } from '../lib/spreadsheetApi'
 import { RoleSwitcher } from '../components/RoleSwitcher'
+import { SchoolTimetableModal } from '../components/SchoolTimetableModal'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
 
 export const ParentDashboard: React.FC = () => {
@@ -256,81 +257,6 @@ export const ParentDashboard: React.FC = () => {
 
   // 学校時刻表 閲覧モーダル用状態
   const [isTimetableModalOpen, setIsTimetableModalOpen] = useState(false)
-  const [timetableModalDate, setTimetableModalDate] = useState<Date>(() => new Date())
-
-  const timetableModalYearMonth = useMemo(() => {
-    const y = timetableModalDate.getFullYear()
-    const m = String(timetableModalDate.getMonth() + 1).padStart(2, '0')
-    return `${y}/${m}`
-  }, [timetableModalDate])
-
-  const timetableModalDays = useMemo(() => {
-    const year = timetableModalDate.getFullYear()
-    const month = timetableModalDate.getMonth()
-    const firstDay = new Date(year, month, 1)
-    const firstDayOfWeek = firstDay.getDay()
-    const lastDay = new Date(year, month + 1, 0)
-    const totalDays = lastDay.getDate()
-    const prevMonthLastDay = new Date(year, month, 0).getDate()
-
-    const days: Array<{
-      dateStr: string
-      dayNumber: number
-      isCurrentMonth: boolean
-      isToday: boolean
-      dayOfWeek: number
-    }> = []
-
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const todayStr = `${new Date().getFullYear()}/${pad(new Date().getMonth() + 1)}/${pad(new Date().getDate())}`
-
-    // 前月余白
-    for (let i = firstDayOfWeek - 1; i >= 0; i--) {
-      const d = prevMonthLastDay - i
-      const prevMonth = month === 0 ? 12 : month
-      const prevYear = month === 0 ? year - 1 : year
-      const dateStr = `${prevYear}/${pad(prevMonth)}/${pad(d)}`
-      const dayDate = new Date(prevYear, prevMonth - 1, d)
-      days.push({
-        dateStr,
-        dayNumber: d,
-        isCurrentMonth: false,
-        isToday: dateStr === todayStr,
-        dayOfWeek: dayDate.getDay()
-      })
-    }
-
-    // 当月
-    for (let d = 1; d <= totalDays; d++) {
-      const dateStr = `${year}/${pad(month + 1)}/${pad(d)}`
-      const dayDate = new Date(year, month, d)
-      days.push({
-        dateStr,
-        dayNumber: d,
-        isCurrentMonth: true,
-        isToday: dateStr === todayStr,
-        dayOfWeek: dayDate.getDay()
-      })
-    }
-
-    // 翌月余白
-    const remainingDays = (7 - (days.length % 7)) % 7
-    for (let d = 1; d <= remainingDays; d++) {
-      const nextMonth = month + 2 > 12 ? 1 : month + 2
-      const nextYear = month + 2 > 12 ? year + 1 : year
-      const dateStr = `${nextYear}/${pad(nextMonth)}/${pad(d)}`
-      const dayDate = new Date(nextYear, nextMonth - 1, d)
-      days.push({
-        dateStr,
-        dayNumber: d,
-        isCurrentMonth: false,
-        isToday: dateStr === todayStr,
-        dayOfWeek: dayDate.getDay()
-      })
-    }
-
-    return days
-  }, [timetableModalDate])
 
   // 今週分モーダルのトリガー
   const openWeekConfirmModal = () => {
@@ -1355,204 +1281,13 @@ export const ParentDashboard: React.FC = () => {
           </div>
         </div>
       )}
-      {/* 学校時刻表 閲覧専用モーダル */}
-      {isTimetableModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 md:p-6 max-w-4xl w-full shadow-2xl space-y-4 my-8 animate-in fade-in zoom-in duration-150 max-h-[90vh] overflow-y-auto">
-            {/* ヘッダー */}
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl">
-                  <Calendar className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-base md:text-lg font-black text-white flex items-center gap-2">
-                    学校運行時刻表（月別カレンダー）
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    学校全体の運行便時刻・行事予定表です。予約入力の参考にご確認ください。
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsTimetableModalOpen(false)}
-                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* ナビゲーション */}
-            <div className="flex items-center justify-between bg-slate-950/70 border border-slate-800/80 rounded-2xl p-3">
-              <div className="flex items-center gap-3">
-                <h4 className="text-base md:text-lg font-black text-white">
-                  {timetableModalDate.getFullYear()}年 {timetableModalDate.getMonth() + 1}月
-                </h4>
-                <button
-                  type="button"
-                  onClick={() => setTimetableModalDate(new Date())}
-                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
-                >
-                  今月
-                </button>
-                {/* 確定ステータスバッジ */}
-                {isMonthPublished(timetableModalYearMonth, basicSettings) ? (
-                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[11px] border border-emerald-500/30">
-                    ✓ 確定済（公開中）
-                  </span>
-                ) : (
-                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[11px] border border-amber-500/30">
-                    ⚠️ 調整中（未確定）
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setTimetableModalDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
-                  className="p-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer"
-                  title="前月"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTimetableModalDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
-                  className="p-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer"
-                  title="次月"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* 凡例 */}
-            <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-400 px-1">
-              <span className="flex items-center gap-1.5 font-bold text-amber-300">
-                <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> 登校便
-              </span>
-              <span className="flex items-center gap-1.5 font-bold text-sky-300">
-                <span className="w-2 h-2 rounded-full bg-sky-400 inline-block" /> 下校1便
-              </span>
-              <span className="flex items-center gap-1.5 font-bold text-indigo-300">
-                <span className="w-2 h-2 rounded-full bg-indigo-400 inline-block" /> 下校2便
-              </span>
-              <span className="flex items-center gap-1.5 font-bold text-purple-300">
-                <span className="w-2 h-2 rounded-full bg-purple-400 inline-block" /> 下校3便
-              </span>
-              <span className="flex items-center gap-1.5 font-bold text-rose-400">
-                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> 祝日/運休
-              </span>
-            </div>
-
-            {/* カレンダーグリッド */}
-            <div className="grid grid-cols-7 gap-1 md:gap-2">
-              {['日', '月', '火', '水', '木', '金', '土'].map((d, i) => (
-                <div
-                  key={d}
-                  className={`py-1.5 text-center text-xs font-black uppercase ${
-                    i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : 'text-slate-400'
-                  }`}
-                >
-                  {d}
-                </div>
-              ))}
-
-              {timetableModalDays.map((day, idx) => {
-                const row = schoolTimetable.find(t => t.date.replace(/-/g, '/') === day.dateStr.replace(/-/g, '/'))
-                const hol = getJapaneseHolidayName(day.dateStr)
-                const susp = checkSuspension(day.dateStr)
-                const isSun = day.dayOfWeek === 0
-                const isSat = day.dayOfWeek === 6
-
-                const morning = formatTimeOnly(row?.morning_trip)
-                const t1 = formatTimeOnly(row?.afternoon_trip_1)
-                const t2 = formatTimeOnly(row?.afternoon_trip_2)
-                const t3 = formatTimeOnly(row?.afternoon_trip_3)
-                const label = (row?.calendar_label || '').trim()
-
-                return (
-                  <div
-                    key={idx}
-                    className={`min-h-[85px] md:min-h-[105px] p-2 rounded-2xl border flex flex-col justify-between transition-all ${
-                      !day.isCurrentMonth
-                        ? 'bg-slate-950/30 border-slate-900/50 opacity-30'
-                        : day.isToday
-                        ? 'bg-slate-900/90 border-amber-500/80 shadow-md'
-                        : hol || isSun || susp.isSuspended
-                        ? 'bg-rose-950/15 border-rose-900/30'
-                        : 'bg-slate-950/70 border-slate-800/80'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <span className={`text-xs font-black ${
-                        day.isToday ? 'text-amber-400' : hol || isSun ? 'text-rose-400' : isSat ? 'text-sky-400' : 'text-slate-300'
-                      }`}>
-                        {day.dayNumber}
-                      </span>
-                      {hol && (
-                        <span className="text-[9px] text-rose-300 truncate max-w-[70%] font-bold">
-                          🎌 {hol}
-                        </span>
-                      )}
-                    </div>
-
-                    {label && (
-                      <div className="text-[10px] text-emerald-300 font-bold truncate my-0.5">
-                        {label}
-                      </div>
-                    )}
-                    {susp.isSuspended && !label && (
-                      <div className="text-[10px] text-rose-400 font-bold truncate my-0.5">
-                        {susp.name || '運休'}
-                      </div>
-                    )}
-
-                    {/* 便情報 */}
-                    <div className="space-y-0.5 text-[10px] font-mono">
-                      {morning && (
-                        <div className="text-amber-300 truncate">
-                          登校 {morning}
-                        </div>
-                      )}
-                      {t1 && (
-                        <div className="text-sky-300 truncate">
-                          下校1便 {t1}
-                        </div>
-                      )}
-                      {t2 && (
-                        <div className="text-indigo-300 truncate">
-                          下校2便 {t2}
-                        </div>
-                      )}
-                      {t3 && (
-                        <div className="text-purple-300 truncate">
-                          下校3便 {t3}
-                        </div>
-                      )}
-                      {!morning && !t1 && !t2 && !t3 && day.isCurrentMonth && (
-                        <div className="text-slate-600 text-[9px]">運行なし</div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* フッター */}
-            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setIsTimetableModalOpen(false)}
-                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition-all cursor-pointer"
-              >
-                閉じる
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 学校運行時刻表モーダル（スマホ対応縦型タイムライン ＆ PC月間カレンダー） */}
+      <SchoolTimetableModal
+        isOpen={isTimetableModalOpen}
+        onClose={() => setIsTimetableModalOpen(false)}
+        schoolTimetable={schoolTimetable}
+        basicSettings={basicSettings}
+      />
     </div>
   )
 }
