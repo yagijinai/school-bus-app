@@ -1,20 +1,25 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import {
   Bus,
   Calendar,
-  Clock,
   MapPin,
-  Users,
   CheckCircle2,
   Circle,
   RefreshCw,
   LogOut,
   AlertTriangle,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  CheckCheck,
+  X
 } from 'lucide-react'
 import { RoleSwitcher } from '../components/RoleSwitcher'
+import { formatTimeToHHmm, formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
+import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
 
 export const DriverDashboard: React.FC = () => {
   const {
@@ -26,7 +31,8 @@ export const DriverDashboard: React.FC = () => {
     busStops,
     guardianMaster,
     basicSettings,
-    schoolTimetable
+    schoolTimetable,
+    recordBoarding
   } = useApp()
 
   // 今日の日付 (YYYY/MM/DD)
@@ -42,6 +48,94 @@ export const DriverDashboard: React.FC = () => {
   const [selectedTrip, setSelectedTrip] = useState<'morning' | 'afternoon_1' | 'afternoon_2' | 'afternoon_3'>('morning')
   // 点呼チェック状態 (運転中のローカル確認用メモリステート)
   const [checkedStudents, setCheckedStudents] = useState<Record<string, boolean>>({})
+  // バス停カードの折りたたみ状態（0名バス停はデフォルト折りたたみ）
+  const [collapsedStops, setCollapsedStops] = useState<Record<string, boolean>>({})
+
+  // 月間時刻表 閲覧モーダル
+  const [isTimetableModalOpen, setIsTimetableModalOpen] = useState(false)
+  const [timetableModalDate, setTimetableModalDate] = useState<Date>(() => new Date())
+
+  const selectedYearMonth = useMemo(() => {
+    return selectedDate.slice(0, 7) // YYYY/MM
+  }, [selectedDate])
+
+  const isSelectedMonthPublished = useMemo(() => {
+    return isMonthPublished(selectedYearMonth, basicSettings)
+  }, [selectedYearMonth, basicSettings])
+
+  const timetableModalYearMonth = useMemo(() => {
+    const y = timetableModalDate.getFullYear()
+    const m = String(timetableModalDate.getMonth() + 1).padStart(2, '0')
+    return `${y}/${m}`
+  }, [timetableModalDate])
+
+  const timetableModalDays = useMemo(() => {
+    const year = timetableModalDate.getFullYear()
+    const month = timetableModalDate.getMonth()
+    const firstDay = new Date(year, month, 1)
+    const firstDayOfWeek = firstDay.getDay()
+    const lastDay = new Date(year, month + 1, 0)
+    const totalDays = lastDay.getDate()
+    const prevMonthLastDay = new Date(year, month, 0).getDate()
+
+    const days: Array<{
+      dateStr: string
+      dayNumber: number
+      isCurrentMonth: boolean
+      isToday: boolean
+      dayOfWeek: number
+    }> = []
+
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const todayStr = `${new Date().getFullYear()}/${pad(new Date().getMonth() + 1)}/${pad(new Date().getDate())}`
+
+    // 前月余白
+    for (let i = firstDayOfWeek - 1; i >= 0; i--) {
+      const d = prevMonthLastDay - i
+      const prevMonth = month === 0 ? 12 : month
+      const prevYear = month === 0 ? year - 1 : year
+      const dateStr = `${prevYear}/${pad(prevMonth)}/${pad(d)}`
+      const dayDate = new Date(prevYear, prevMonth - 1, d)
+      days.push({
+        dateStr,
+        dayNumber: d,
+        isCurrentMonth: false,
+        isToday: dateStr === todayStr,
+        dayOfWeek: dayDate.getDay()
+      })
+    }
+
+    // 当月
+    for (let d = 1; d <= totalDays; d++) {
+      const dateStr = `${year}/${pad(month + 1)}/${pad(d)}`
+      const dayDate = new Date(year, month, d)
+      days.push({
+        dateStr,
+        dayNumber: d,
+        isCurrentMonth: true,
+        isToday: dateStr === todayStr,
+        dayOfWeek: dayDate.getDay()
+      })
+    }
+
+    // 翌月余白
+    const remainingDays = (7 - (days.length % 7)) % 7
+    for (let d = 1; d <= remainingDays; d++) {
+      const nextMonth = month + 2 > 12 ? 1 : month + 2
+      const nextYear = month + 2 > 12 ? year + 1 : year
+      const dateStr = `${nextYear}/${pad(nextMonth)}/${pad(d)}`
+      const dayDate = new Date(nextYear, nextMonth - 1, d)
+      days.push({
+        dateStr,
+        dayNumber: d,
+        isCurrentMonth: false,
+        isToday: dateStr === todayStr,
+        dayOfWeek: dayDate.getDay()
+      })
+    }
+
+    return days
+  }, [timetableModalDate])
 
   // 日付の前後移動
   const changeDateByDays = (days: number) => {
@@ -52,6 +146,20 @@ export const DriverDashboard: React.FC = () => {
     const day = String(d.getDate()).padStart(2, '0')
     setSelectedDate(`${y}/${m}/${day}`)
   }
+
+  // 選択日の曜日
+  const selectedDayOfWeekStr = useMemo(() => {
+    const parts = selectedDate.split('/').map(Number)
+    if (parts.length < 3) return ''
+    const d = new Date(parts[0], parts[1] - 1, parts[2])
+    const weekDays = ['日', '月', '火', '水', '木', '金', '土']
+    return weekDays[d.getDay()]
+  }, [selectedDate])
+
+  // 祝日判定
+  const holidayName = useMemo(() => {
+    return getJapaneseHolidayName(selectedDate)
+  }, [selectedDate])
 
   // 運休判定
   const holidayInfo = useMemo(() => {
@@ -67,12 +175,28 @@ export const DriverDashboard: React.FC = () => {
     return null
   }, [selectedDate, basicSettings])
 
-  // 学校用時刻表の備考
+  // 学校用時刻表の該当日データ
   const schoolTimetableRow = useMemo(() => {
     const target = selectedDate.replace(/-/g, '/')
     return schoolTimetable.find(t => t.date.replace(/-/g, '/') === target)
   }, [selectedDate, schoolTimetable])
 
+  // 便ごとの発車時刻文字列
+  const tripTimeStr = useMemo(() => {
+    if (selectedTrip === 'morning') {
+      return schoolTimetableRow?.morning_trip ? formatTimeToHHmm(schoolTimetableRow.morning_trip) : ''
+    }
+    if (selectedTrip === 'afternoon_1') {
+      return schoolTimetableRow?.afternoon_trip_1 ? formatTimeToHHmm(schoolTimetableRow.afternoon_trip_1) : ''
+    }
+    if (selectedTrip === 'afternoon_2') {
+      return schoolTimetableRow?.afternoon_trip_2 ? formatTimeToHHmm(schoolTimetableRow.afternoon_trip_2) : ''
+    }
+    if (selectedTrip === 'afternoon_3') {
+      return schoolTimetableRow?.afternoon_trip_3 ? formatTimeToHHmm(schoolTimetableRow.afternoon_trip_3) : ''
+    }
+    return ''
+  }, [selectedTrip, schoolTimetableRow])
 
   // 選択日の全乗車生徒の割り出し
   const tripPassengers = useMemo(() => {
@@ -166,13 +290,72 @@ export const DriverDashboard: React.FC = () => {
     return grouped
   }, [busStops, tripPassengers])
 
-  // チェックトグル
-  const toggleCheck = (studentName: string) => {
+  // schedules から乗車確認済み状態を復元・同期
+  useEffect(() => {
+    const nextChecked: Record<string, boolean> = {}
+    tripPassengers.forEach(p => {
+      const sched = schedules.find(
+        s => s.student_name === p.studentName && s.date.replace(/-/g, '/') === selectedDate.replace(/-/g, '/')
+      )
+      const boardedVal = selectedTrip === 'morning' ? sched?.morning_boarding : sched?.afternoon_boarding
+      const key = `${selectedDate}_${selectedTrip}_${p.studentName}`
+      if (boardedVal) {
+        nextChecked[key] = true
+      }
+    })
+    setCheckedStudents(prev => ({
+      ...nextChecked,
+      ...prev
+    }))
+  }, [schedules, selectedDate, selectedTrip, tripPassengers])
+
+  // チェックトグル（楽観的更新 ＋ GAS recordBoarding 呼び出し）
+  const toggleCheck = (studentName: string, busStopName: string = '') => {
     const key = `${selectedDate}_${selectedTrip}_${studentName}`
+    const nextChecked = !checkedStudents[key]
+    
+    // 1. 楽観的UI更新（画面上は即座にチェックマーク切り替え）
     setCheckedStudents(prev => ({
       ...prev,
-      [key]: !prev[key]
+      [key]: nextChecked
     }))
+
+    // 2. バックグラウンドで GAS の recordBoarding を呼び出し
+    const tripType = selectedTrip === 'morning' ? '登校' : '下校'
+    recordBoarding({
+      date: selectedDate,
+      studentName,
+      tripType,
+      boarded: nextChecked,
+      busStop: busStopName
+    })
+  }
+
+  // バス停内の生徒を一括チェック/解除（楽観的更新 ＋ GAS連動）
+  const toggleAllStudentsAtStop = (students: Array<{ studentName: string; busStopName?: string }>, defaultStopName: string = '') => {
+    const allChecked = students.every(s => checkedStudents[`${selectedDate}_${selectedTrip}_${s.studentName}`])
+    const nextChecked = !allChecked
+    const tripType = selectedTrip === 'morning' ? '登校' : '下校'
+
+    // 1. 楽観的一括更新
+    setCheckedStudents(prev => {
+      const next = { ...prev }
+      students.forEach(s => {
+        next[`${selectedDate}_${selectedTrip}_${s.studentName}`] = nextChecked
+      })
+      return next
+    })
+
+    // 2. 各生徒ごとにバックグラウンドで recordBoarding を呼び出し
+    students.forEach(s => {
+      recordBoarding({
+        date: selectedDate,
+        studentName: s.studentName,
+        tripType,
+        boarded: nextChecked,
+        busStop: s.busStopName || defaultStopName
+      })
+    })
   }
 
   // チェック状況カウント
@@ -185,78 +368,124 @@ export const DriverDashboard: React.FC = () => {
     return count
   }, [tripPassengers, selectedDate, selectedTrip, checkedStudents])
 
+  // 折りたたみトグル
+  const toggleStop = (stopName: string) => {
+    setCollapsedStops(prev => ({
+      ...prev,
+      [stopName]: !prev[stopName]
+    }))
+  }
+
+  const tripTabs = [
+    { id: 'morning', label: '登校便', shortLabel: '登校', icon: '🌅', color: 'amber' },
+    { id: 'afternoon_1', label: '下校1便', shortLabel: '下校1', icon: '🚌', color: 'sky' },
+    { id: 'afternoon_2', label: '下校2便', shortLabel: '下校2', icon: '🚍', color: 'indigo' },
+    { id: 'afternoon_3', label: '下校3便', shortLabel: '下校3', icon: '🌙', color: 'purple' }
+  ] as const
+
+  const isAllChecked = tripPassengers.length > 0 && checkedCount === tripPassengers.length
+
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans">
-      {/* ヘッダー */}
-      <header className="bg-slate-900 text-white shadow-md sticky top-0 z-30">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-emerald-600 p-2 rounded-xl text-white shadow-md">
-              <Bus className="w-6 h-6" />
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans pb-12">
+      {/* ========================================================= */}
+      {/* 1. 最上部固定エリア（ヘッダー ＋ 日付ナビ ＋ 便切り替えタブ ＋ 合計乗車人数） */}
+      {/* スマホ縦画面・片手操作で指が届きやすく直感的に把握できる設計 */}
+      {/* ========================================================= */}
+      <div className="sticky top-0 z-40 bg-slate-900 text-white shadow-lg border-b border-slate-850">
+        {/* 最上段：タイトル・操作ボタン */}
+        <div className="max-w-xl mx-auto px-3.5 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-emerald-500 p-1.5 rounded-lg text-slate-950 shadow-md">
+              <Bus className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold tracking-tight">乗車運行リスト</h1>
-              <p className="text-xs text-slate-400">
-                運転手: {user?.name || user?.email}
+              <h1 className="text-sm font-black tracking-tight leading-tight">乗務員ダッシュボード</h1>
+              <p className="text-[10px] text-slate-400 font-mono">
+                {user?.name || user?.email}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center gap-1.5">
             <RoleSwitcher />
+            <button
+              type="button"
+              onClick={() => setIsTimetableModalOpen(true)}
+              className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 active:scale-95 text-sky-300 border border-slate-700 rounded-xl transition text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-sm"
+              title="月間運行時刻表を確認"
+            >
+              <Calendar className="w-4 h-4 text-sky-400" />
+              <span>月間時刻表</span>
+            </button>
             <button
               onClick={() => refreshAll()}
               disabled={syncing}
-              className="flex items-center space-x-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded-lg text-sm transition"
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 rounded-lg transition"
               title="スプレッドシート再取得"
             >
               <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin text-emerald-400' : ''}`} />
-              <span className="hidden sm:inline">{syncing ? '同期中...' : '更新'}</span>
             </button>
             <button
               onClick={logout}
-              className="flex items-center space-x-1 px-3 py-1.5 bg-rose-900/80 hover:bg-rose-800 text-rose-100 rounded-lg text-sm transition"
+              className="p-1.5 bg-rose-950 hover:bg-rose-900 active:scale-95 text-rose-300 rounded-lg transition"
               title="ログアウト"
             >
               <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">ログアウト</span>
             </button>
           </div>
         </div>
-      </header>
 
-      {/* メインエリア */}
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 py-4 space-y-4">
-        {/* 運休・注意アラート */}
-        {holidayInfo && (
-          <div className="bg-amber-500 text-white p-3.5 rounded-xl shadow flex items-center space-x-3">
-            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
-            <div className="text-sm">
-              <span className="font-bold">【運休・特別期間】</span> {holidayInfo.setting_name}（{holidayInfo.start_date} ～ {holidayInfo.end_date}）
-              {holidayInfo.note && <span className="ml-2">※ {holidayInfo.note}</span>}
+        {/* 確定通知バナー */}
+        <div className="max-w-xl mx-auto px-3.5 pb-2">
+          {isSelectedMonthPublished ? (
+            <div className="px-3 py-1.5 bg-emerald-950/80 border border-emerald-500/40 rounded-xl flex items-center justify-between gap-2 text-emerald-200 text-xs shadow-sm">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="font-bold truncate">
+                  📢 {selectedYearMonth.replace('/', '年')}月分の運行時刻表が確定・公開されています
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTimetableModalOpen(true)}
+                className="text-[11px] font-black text-emerald-300 underline underline-offset-2 shrink-0 cursor-pointer"
+              >
+                確認
+              </button>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="px-3 py-1.5 bg-amber-950/80 border border-amber-500/40 rounded-xl flex items-center justify-between gap-2 text-amber-200 text-xs shadow-sm">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="font-bold truncate">
+                  ⚠️ {selectedYearMonth.replace('/', '年')}月分の運行時刻表は現在学校で調整中です
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTimetableModalOpen(true)}
+                className="text-[11px] font-black text-amber-300 underline underline-offset-2 shrink-0 cursor-pointer"
+              >
+                予定確認
+              </button>
+            </div>
+          )}
+        </div>
 
-        {schoolTimetableRow?.note && (
-          <div className="bg-blue-50 border border-blue-200 text-blue-800 p-3 rounded-xl text-xs flex items-center space-x-2">
-            <span className="font-bold bg-blue-600 text-white px-1.5 py-0.5 rounded text-[10px]">学校連絡</span>
-            <span>{schoolTimetableRow.note}</span>
-          </div>
-        )}
-
-        {/* 日付ナビゲーション */}
-        <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center space-x-2">
+        {/* 2段目：日付ナビゲーション */}
+        <div className="bg-slate-950/80 px-3.5 py-2 border-t border-slate-800/80">
+          <div className="max-w-xl mx-auto flex items-center justify-between gap-2">
             <button
               onClick={() => changeDateByDays(-1)}
-              className="p-2 hover:bg-slate-100 active:scale-95 rounded-xl border border-slate-200 text-slate-700 transition"
-              title="前日"
+              className="px-2.5 py-1.5 bg-slate-850 hover:bg-slate-800 active:scale-90 text-slate-300 rounded-xl border border-slate-750 flex items-center gap-1 text-xs font-bold transition"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="w-4 h-4" />
+              <span>前日</span>
             </button>
-            <div className="flex items-center space-x-2">
-              <Calendar className="w-5 h-5 text-emerald-600" />
+
+            {/* 日付選択 */}
+            <div className="flex items-center gap-1.5 bg-slate-900 border border-slate-750 px-3 py-1 rounded-xl shadow-inner flex-1 justify-center max-w-[240px]">
+              <Calendar className="w-4 h-4 text-emerald-400 shrink-0" />
               <input
                 type="date"
                 value={selectedDate.replace(/\//g, '-')}
@@ -265,175 +494,345 @@ export const DriverDashboard: React.FC = () => {
                     setSelectedDate(e.target.value.replace(/-/g, '/'))
                   }
                 }}
-                className="font-bold text-slate-800 border-none bg-slate-50 px-3 py-1.5 rounded-lg text-base focus:ring-2 focus:ring-emerald-500"
+                className="bg-transparent text-white font-black text-sm text-center focus:outline-none cursor-pointer w-28"
               />
+              <span className={`text-xs font-bold ${
+                selectedDayOfWeekStr === '日' || holidayName ? 'text-rose-400' :
+                selectedDayOfWeekStr === '土' ? 'text-sky-400' : 'text-slate-400'
+              }`}>
+                ({selectedDayOfWeekStr})
+              </span>
             </div>
-            <button
-              onClick={() => changeDateByDays(1)}
-              className="p-2 hover:bg-slate-100 active:scale-95 rounded-xl border border-slate-200 text-slate-700 transition"
-              title="翌日"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          </div>
 
-          <button
-            onClick={() => setSelectedDate(getTodayStr())}
-            className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
-          >
-            今日へ移動
-          </button>
-        </div>
-
-        {/* 便選択タブ */}
-        <div className="grid grid-cols-4 gap-2">
-          {[
-            { id: 'morning', label: '登校便 (朝)', icon: '🌅' },
-            { id: 'afternoon_1', label: '下校 1便', icon: '🚌' },
-            { id: 'afternoon_2', label: '下校 2便', icon: '🚍' },
-            { id: 'afternoon_3', label: '下校 3便', icon: '🌙' }
-          ].map(trip => {
-            const active = selectedTrip === trip.id
-            return (
+            <div className="flex items-center gap-1.5">
               <button
-                key={trip.id}
-                onClick={() => setSelectedTrip(trip.id as any)}
-                className={`py-3 px-2 rounded-xl text-center font-bold text-xs sm:text-sm transition flex flex-col items-center justify-center space-y-1 ${
-                  active
-                    ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-500 ring-offset-1'
-                    : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-sm'
-                }`}
+                onClick={() => setSelectedDate(getTodayStr())}
+                className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-90 text-white rounded-xl text-xs font-black transition shadow-sm"
               >
-                <span className="text-base">{trip.icon}</span>
-                <span>{trip.label}</span>
+                今日
               </button>
-            )
-          })}
-        </div>
-
-        {/* サマリーバー */}
-        <div className="bg-slate-900 text-white rounded-2xl p-4 shadow-sm flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-slate-800 p-2.5 rounded-xl">
-              <Users className="w-5 h-5 text-emerald-400" />
+              <button
+                onClick={() => changeDateByDays(1)}
+                className="px-2.5 py-1.5 bg-slate-850 hover:bg-slate-800 active:scale-90 text-slate-300 rounded-xl border border-slate-755 flex items-center gap-1 text-xs font-bold transition"
+              >
+                <span>翌日</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
-            <div>
-              <p className="text-xs text-slate-400 font-medium">乗車予定人数</p>
-              <p className="text-xl font-bold">
-                {tripPassengers.length} <span className="text-xs font-normal text-slate-400">名</span>
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-2 bg-slate-800/80 px-4 py-2 rounded-xl">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs text-slate-300">点呼確認済:</span>
-            <span className="text-sm font-bold text-emerald-400">{checkedCount} / {tripPassengers.length}</span>
           </div>
         </div>
 
-        {/* バス停順乗車リスト */}
+        {/* 3段目：便切り替え大型タブ（🌅 登校便 / 🚌 下校1便 / 🚍 下校2便 / 🌙 下校3便） */}
+        <div className="px-2.5 pt-2 pb-2.5 bg-slate-900 border-t border-slate-800">
+          <div className="max-w-xl mx-auto grid grid-cols-4 gap-1.5">
+            {tripTabs.map(trip => {
+              const active = selectedTrip === trip.id
+              return (
+                <button
+                  key={trip.id}
+                  onClick={() => setSelectedTrip(trip.id as any)}
+                  className={`py-2.5 px-1 rounded-2xl text-center font-black transition-all flex flex-col items-center justify-center space-y-0.5 active:scale-95 select-none ${
+                    active
+                      ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/25 ring-2 ring-emerald-300'
+                      : 'bg-slate-800/90 text-slate-300 hover:bg-slate-750 border border-slate-700'
+                  }`}
+                >
+                  <span className="text-lg leading-none">{trip.icon}</span>
+                  <span className="text-xs sm:text-sm tracking-tight">{trip.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* 4段目：当該便の「合計乗車人数」＆点呼確認サマリーバー */}
+        <div className="bg-slate-950 px-3.5 py-2.5 border-t border-slate-800/80">
+          <div className="max-w-xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-400">乗車合計:</span>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-black text-emerald-400 tracking-tight">
+                  {tripPassengers.length}
+                </span>
+                <span className="text-xs font-bold text-slate-400">名</span>
+              </div>
+              {tripTimeStr && (
+                <span className="ml-1 text-[11px] px-2 py-0.5 rounded-full bg-slate-800 text-amber-300 font-mono font-bold border border-slate-700">
+                  {tripTimeStr}発
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="text-right">
+                <div className="flex items-center gap-1.5 justify-end">
+                  <span className="text-[11px] text-slate-400 font-bold">点呼完了:</span>
+                  <span className={`text-sm font-black font-mono ${
+                    isAllChecked ? 'text-emerald-400' : 'text-white'
+                  }`}>
+                    {checkedCount} / {tripPassengers.length}
+                  </span>
+                </div>
+                {/* 進行状況バー */}
+                <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden mt-0.5 ml-auto">
+                  <div
+                    className={`h-full transition-all duration-300 ${isAllChecked ? 'bg-emerald-400' : 'bg-emerald-500'}`}
+                    style={{
+                      width: tripPassengers.length > 0 ? `${(checkedCount / tripPassengers.length) * 100}%` : '0%'
+                    }}
+                  />
+                </div>
+              </div>
+
+              {isAllChecked && (
+                <span className="flex items-center gap-1 text-[10px] font-black px-2 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                  <Sparkles className="w-3 h-3" />
+                  全員確認
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* 2. メインコンテンツエリア */}
+      {/* ========================================================= */}
+      <main className="flex-1 max-w-xl w-full mx-auto px-3.5 py-3 space-y-3">
+        {/* 祝日・運休・学校連絡アラート */}
+        {holidayName && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 p-2.5 rounded-2xl shadow-sm flex items-center gap-2 text-xs font-bold">
+            <span className="text-base">🎌</span>
+            <span>日本の祝日: <strong>{holidayName}</strong> です</span>
+          </div>
+        )}
+
+        {holidayInfo && (
+          <div className="bg-amber-500 text-slate-950 p-3 rounded-2xl shadow-md flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-slate-950 mt-0.5" />
+            <div className="text-xs">
+              <span className="font-black">【運休・特別期間】</span> {holidayInfo.setting_name}（{holidayInfo.start_date} ～ {holidayInfo.end_date}）
+              {holidayInfo.note && <div className="mt-0.5 text-[11px] font-medium opacity-90">{holidayInfo.note}</div>}
+            </div>
+          </div>
+        )}
+
+        {schoolTimetableRow?.note && (
+          <div className="bg-sky-50 border border-sky-200 text-sky-900 p-2.5 rounded-2xl text-xs flex items-center gap-2 shadow-sm">
+            <span className="font-black bg-sky-600 text-white px-1.5 py-0.5 rounded text-[10px]">学校連絡</span>
+            <span className="font-medium">{schoolTimetableRow.note}</span>
+          </div>
+        )}
+
+        {/* バス停ごとのカード（ルート順・アコーディオン対応） */}
         <div className="space-y-3">
           {sortedBusStopsWithStudents.length === 0 ? (
-            <div className="bg-white rounded-2xl p-8 text-center text-slate-400 border border-slate-200">
+            <div className="bg-white rounded-3xl p-8 text-center text-slate-400 border border-slate-200 shadow-sm">
               バス停データがありません。
             </div>
           ) : (
             sortedBusStopsWithStudents.map(({ stop, students }) => {
-              const hasStudents = students.length > 0
+              const studentCount = students.length
+              const hasStudents = studentCount > 0
+              // 0名のバス停はデフォルト折りたたみ、生徒がいるバス停はデフォルト展開
+              const isCollapsed = collapsedStops[stop.name] !== undefined
+                ? collapsedStops[stop.name]
+                : !hasStudents
+
+              // バス停内の点呼完了チェック
+              const stopCheckedCount = students.filter(
+                p => checkedStudents[`${selectedDate}_${selectedTrip}_${p.studentName}`]
+              ).length
+              const isStopAllChecked = hasStudents && stopCheckedCount === studentCount
+
+              // バス停の時刻見出し（登校便はマスタ時刻、下校便は時刻表マスタ等）
+              const stopTime = selectedTrip === 'morning'
+                ? (stop.arrival_time_morning && stop.arrival_time_morning !== '-' ? formatTimeToHHmm(stop.arrival_time_morning) : '')
+                : tripTimeStr
 
               return (
                 <div
                   key={stop.name}
-                  className={`bg-white rounded-2xl border transition shadow-sm overflow-hidden ${
-                    hasStudents ? 'border-slate-200' : 'border-slate-100 opacity-60'
+                  className={`rounded-3xl border transition-all overflow-hidden ${
+                    !hasStudents
+                      ? 'bg-slate-100/80 border-slate-200/80 opacity-70'
+                      : isStopAllChecked
+                      ? 'bg-white border-emerald-300 shadow-sm ring-1 ring-emerald-200'
+                      : 'bg-white border-slate-200 shadow-md'
                   }`}
                 >
-                  {/* バス停ヘッダー */}
-                  <div className={`px-4 py-3 flex items-center justify-between ${hasStudents ? 'bg-slate-50' : 'bg-slate-50/50'}`}>
-                    <div className="flex items-center space-x-3">
-                      <span className="w-7 h-7 rounded-full bg-slate-800 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                  {/* バス停カードヘッダー（タップで開閉可能） */}
+                  <div
+                    onClick={() => toggleStop(stop.name)}
+                    className={`px-4 py-3.5 flex items-center justify-between cursor-pointer transition select-none ${
+                      !hasStudents
+                        ? 'bg-slate-100 hover:bg-slate-200/60'
+                        : isStopAllChecked
+                        ? 'bg-emerald-50/70 hover:bg-emerald-100/50'
+                        : 'bg-slate-50 hover:bg-slate-100/80'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* 順序バッジ */}
+                      <span className={`w-7 h-7 rounded-xl text-xs font-black flex items-center justify-center shrink-0 ${
+                        !hasStudents
+                          ? 'bg-slate-300 text-slate-600'
+                          : isStopAllChecked
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'bg-slate-800 text-white shadow-sm'
+                      }`}>
                         {stop.order || '-'}
                       </span>
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <MapPin className="w-4 h-4 text-emerald-600" />
-                          <h3 className="font-bold text-slate-800 text-base">{stop.name}</h3>
+
+                      {/* バス停名と発車予定時刻 */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <MapPin className={`w-4 h-4 shrink-0 ${hasStudents ? 'text-emerald-600' : 'text-slate-400'}`} />
+                          <h3 className={`font-black text-sm sm:text-base truncate ${
+                            hasStudents ? 'text-slate-900' : 'text-slate-500'
+                          }`}>
+                            {stop.name}
+                            {stopTime && (
+                              <span className="ml-1 text-xs font-normal text-slate-500 font-mono">
+                                （{stopTime}発）
+                              </span>
+                            )}
+                          </h3>
                         </div>
                         {stop.address && (
-                          <p className="text-xs text-slate-400 pl-6">{stop.address}</p>
+                          <p className="text-[11px] text-slate-400 truncate pl-5">{stop.address}</p>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center space-x-3">
-                      {stop.arrival_time_morning && selectedTrip === 'morning' && (
-                        <div className="flex items-center space-x-1 text-xs text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-md">
-                          <Clock className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{stop.arrival_time_morning} 予定</span>
+                    {/* 右側：人数バッジ・ステータス・開閉トグル */}
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {hasStudents ? (
+                        <div className="flex items-center gap-1.5">
+                          {isStopAllChecked ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-xs font-black flex items-center gap-1 shadow-sm">
+                              <CheckCircle2 className="w-3 h-3" />
+                              完了 {studentCount}名
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-black">
+                              {stopCheckedCount}/{studentCount}名
+                            </span>
+                          )}
                         </div>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-500 text-[11px] font-bold">
+                          通過（0名）
+                        </span>
                       )}
-                      <span
-                        className={`text-xs px-2.5 py-1 rounded-full font-bold ${
-                          hasStudents
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        {students.length}名
-                      </span>
+
+                      <div className="text-slate-400 p-1">
+                        {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                      </div>
                     </div>
                   </div>
 
-                  {/* 生徒一覧 */}
-                  {hasStudents ? (
-                    <div className="divide-y divide-slate-100">
-                      {students.map(p => {
-                        const checkKey = `${selectedDate}_${selectedTrip}_${p.studentName}`
-                        const isChecked = !!checkedStudents[checkKey]
-
-                        return (
-                          <div
-                            key={p.studentName}
-                            onClick={() => toggleCheck(p.studentName)}
-                            className={`p-3.5 flex items-center justify-between hover:bg-slate-50 cursor-pointer transition select-none ${
-                              isChecked ? 'bg-emerald-50/50' : ''
-                            }`}
-                          >
-                            <div className="flex items-center space-x-3">
-                              {isChecked ? (
-                                <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />
-                              ) : (
-                                <Circle className="w-6 h-6 text-slate-300 flex-shrink-0" />
-                              )}
-                              <div>
-                                <p className={`font-bold text-base ${isChecked ? 'text-emerald-950 line-through' : 'text-slate-900'}`}>
-                                  {p.studentName}
-                                </p>
-                                {p.note && (
-                                  <p className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded mt-0.5 inline-block font-medium">
-                                    備考: {p.note}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-
-                            <span
-                              className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${
-                                isChecked
-                                  ? 'bg-emerald-600 text-white'
-                                  : 'bg-slate-100 text-slate-600'
-                              }`}
-                            >
-                              {isChecked ? '乗車済' : '未乗車'}
+                  {/* アコーディオン展開部：生徒リスト */}
+                  {!isCollapsed && (
+                    <div className="border-t border-slate-100">
+                      {hasStudents ? (
+                        <>
+                          {/* バス停内一括操作バー */}
+                          <div className="px-4 py-2 bg-slate-50/50 flex items-center justify-between border-b border-slate-100 text-xs">
+                            <span className="text-slate-500 font-bold text-[11px]">
+                              乗車生徒一覧 ({studentCount}名)
                             </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleAllStudentsAtStop(students, stop.name)
+                              }}
+                              className="text-[11px] text-emerald-700 hover:text-emerald-800 font-bold flex items-center gap-1 px-2 py-0.5 rounded-md hover:bg-emerald-50 transition"
+                            >
+                              <CheckCheck className="w-3.5 h-3.5" />
+                              {isStopAllChecked ? 'すべて未乗車に戻す' : 'このバス停全員を乗車済みにする'}
+                            </button>
                           </div>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <div className="p-3 text-center text-xs text-slate-400">
-                      このバス停での乗車予定生徒はいません
+
+                          {/* 生徒一覧 */}
+                          <div className="divide-y divide-slate-100">
+                            {students.map(p => {
+                              const checkKey = `${selectedDate}_${selectedTrip}_${p.studentName}`
+                              const isChecked = !!checkedStudents[checkKey]
+
+                              // スプレッドシート保存済みの乗車確認値を取得
+                              const sched = schedules.find(
+                                s => s.student_name === p.studentName && s.date.replace(/-/g, '/') === selectedDate.replace(/-/g, '/')
+                              )
+                              const boardingTimeStr = selectedTrip === 'morning' ? sched?.morning_boarding : sched?.afternoon_boarding
+
+                              return (
+                                <div
+                                  key={p.studentName}
+                                  onClick={() => toggleCheck(p.studentName, p.busStopName || stop.name)}
+                                  className={`px-4 py-3.5 min-h-[58px] flex items-center justify-between hover:bg-slate-50 cursor-pointer transition select-none active:bg-slate-100 ${
+                                    isChecked ? 'bg-emerald-50/40' : 'bg-white'
+                                  }`}
+                                >
+                                  {/* 左側：チェックボックス ＆ 生徒名 ＆ 備考 */}
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <button
+                                      type="button"
+                                      className="p-1 -ml-1 text-emerald-600 focus:outline-none"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        toggleCheck(p.studentName, p.busStopName || stop.name)
+                                      }}
+                                    >
+                                      {isChecked ? (
+                                        <CheckCircle2 className="w-7 h-7 text-emerald-600 fill-emerald-100 shrink-0" />
+                                      ) : (
+                                        <Circle className="w-7 h-7 text-slate-300 shrink-0 hover:text-slate-400" />
+                                      )}
+                                    </button>
+
+                                    <div className="min-w-0">
+                                      <p className={`font-black text-base sm:text-lg tracking-tight ${
+                                        isChecked ? 'text-emerald-950 line-through opacity-70' : 'text-slate-900'
+                                      }`}>
+                                        {p.studentName}
+                                      </p>
+                                      {p.note && (
+                                        <p className="text-xs text-amber-900 bg-amber-100/90 border border-amber-200 px-2 py-0.5 rounded-lg mt-0.5 inline-block font-bold">
+                                          備考: {p.note}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* 右側：乗車状況バッジ */}
+                                  <span
+                                    className={`text-xs font-black px-3 py-1.5 rounded-xl shrink-0 transition flex items-center gap-1.5 ${
+                                      isChecked
+                                        ? 'bg-emerald-600 text-white shadow-sm'
+                                        : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                    }`}
+                                  >
+                                    {isChecked ? (
+                                      <>
+                                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                        <span>{boardingTimeStr ? `${boardingTimeStr} 乗車済` : '乗車済'}</span>
+                                      </>
+                                    ) : (
+                                      '未乗車'
+                                    )}
+                                  </span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="p-3.5 text-center text-xs text-slate-400 bg-slate-50/50">
+                          このバス停での乗車生徒はいません（通過）
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -442,6 +841,199 @@ export const DriverDashboard: React.FC = () => {
           )}
         </div>
       </main>
+
+      {/* ========================================================= */}
+      {/* 運転手向け 月間時刻表閲覧モーダル */}
+      {/* ========================================================= */}
+      {isTimetableModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-6 max-w-2xl w-full shadow-2xl space-y-4 my-6 animate-in fade-in zoom-in duration-150 max-h-[90vh] overflow-y-auto text-white">
+            {/* ヘッダー */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl">
+                  <Calendar className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    月間運行時刻表
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    学校全体の登校・下校便発車時刻および運行予定一覧です。
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTimetableModalOpen(false)}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* ナビゲーション ＆ ステータス */}
+            <div className="flex items-center justify-between bg-slate-950/80 border border-slate-800 rounded-2xl p-3">
+              <div className="flex items-center gap-2.5">
+                <h4 className="text-base font-black text-white">
+                  {timetableModalDate.getFullYear()}年 {timetableModalDate.getMonth() + 1}月
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setTimetableModalDate(new Date())}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+                >
+                  今月
+                </button>
+                {isMonthPublished(timetableModalYearMonth, basicSettings) ? (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-[10px] border border-emerald-500/30">
+                    ✓ 確定・公開済
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30">
+                    ⚠️ 調整中
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setTimetableModalDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
+                  className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition cursor-pointer"
+                  title="前月"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimetableModalDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
+                  className="p-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition cursor-pointer"
+                  title="次月"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* 凡例 */}
+            <div className="flex flex-wrap items-center gap-2.5 text-[10px] text-slate-400 px-1">
+              <span className="flex items-center gap-1 font-bold text-amber-300">
+                <span className="w-2 h-2 rounded-full bg-amber-400" /> 登校
+              </span>
+              <span className="flex items-center gap-1 font-bold text-sky-300">
+                <span className="w-2 h-2 rounded-full bg-sky-400" /> 下校1
+              </span>
+              <span className="flex items-center gap-1 font-bold text-indigo-300">
+                <span className="w-2 h-2 rounded-full bg-indigo-400" /> 下校2
+              </span>
+              <span className="flex items-center gap-1 font-bold text-purple-300">
+                <span className="w-2 h-2 rounded-full bg-purple-400" /> 下校3
+              </span>
+              <span className="flex items-center gap-1 font-bold text-rose-400">
+                <span className="w-2 h-2 rounded-full bg-rose-500" /> 祝日/運休
+              </span>
+            </div>
+
+            {/* カレンダー */}
+            <div className="grid grid-cols-7 gap-1">
+              {['日', '月', '火', '水', '木', '金', '土'].map((d, i) => (
+                <div
+                  key={d}
+                  className={`py-1 text-center text-xs font-black uppercase ${
+                    i === 0 ? 'text-rose-400' : i === 6 ? 'text-sky-400' : 'text-slate-400'
+                  }`}
+                >
+                  {d}
+                </div>
+              ))}
+
+              {timetableModalDays.map((day, idx) => {
+                const row = schoolTimetable.find(t => t.date.replace(/-/g, '/') === day.dateStr.replace(/-/g, '/'))
+                const hol = getJapaneseHolidayName(day.dateStr)
+                const isSun = day.dayOfWeek === 0
+                const isSat = day.dayOfWeek === 6
+
+                const morning = formatTimeOnly(row?.morning_trip)
+                const t1 = formatTimeOnly(row?.afternoon_trip_1)
+                const t2 = formatTimeOnly(row?.afternoon_trip_2)
+                const t3 = formatTimeOnly(row?.afternoon_trip_3)
+                const label = (row?.calendar_label || '').trim()
+
+                return (
+                  <div
+                    key={idx}
+                    className={`min-h-[75px] sm:min-h-[90px] p-1.5 rounded-xl border flex flex-col justify-between transition ${
+                      !day.isCurrentMonth
+                        ? 'bg-slate-950/30 border-slate-900/50 opacity-30'
+                        : day.isToday
+                        ? 'bg-slate-900/90 border-amber-500/80 shadow'
+                        : hol || isSun
+                        ? 'bg-rose-950/15 border-rose-900/30'
+                        : 'bg-slate-950/70 border-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <span className={`text-xs font-black ${
+                        day.isToday ? 'text-amber-400' : hol || isSun ? 'text-rose-400' : isSat ? 'text-sky-400' : 'text-slate-300'
+                      }`}>
+                        {day.dayNumber}
+                      </span>
+                      {hol && (
+                        <span className="text-[8px] text-rose-300 truncate max-w-[70%] font-bold">
+                          🎌
+                        </span>
+                      )}
+                    </div>
+
+                    {label && (
+                      <div className="text-[9px] text-emerald-300 font-bold truncate">
+                        {label}
+                      </div>
+                    )}
+
+                    <div className="space-y-0.5 text-[9px] font-mono leading-tight">
+                      {morning && (
+                        <div className="text-amber-300 truncate">
+                          登校 {morning}
+                        </div>
+                      )}
+                      {t1 && (
+                        <div className="text-sky-300 truncate">
+                          下校1便 {t1}
+                        </div>
+                      )}
+                      {t2 && (
+                        <div className="text-indigo-300 truncate">
+                          下校2便 {t2}
+                        </div>
+                      )}
+                      {t3 && (
+                        <div className="text-purple-300 truncate">
+                          下校3便 {t3}
+                        </div>
+                      )}
+                      {!morning && !t1 && !t2 && !t3 && day.isCurrentMonth && (
+                        <div className="text-slate-600 text-[8px]">運休</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* フッター */}
+            <div className="flex items-center justify-end pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsTimetableModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

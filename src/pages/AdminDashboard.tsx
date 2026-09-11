@@ -5,17 +5,18 @@ import {
   RefreshCw, LogOut, Check, 
   Sun, Snowflake, Palmtree, Ban, Filter,
   ChevronLeft, ChevronRight, Plus, Trash2, Edit3, X, Sparkles, CheckCircle2, Layers,
-  Copy, UserPlus
+  Copy, UserPlus, CalendarCheck, Lock
 } from 'lucide-react'
-import type { BasicSettingRow, GuardianMasterRow, SchoolTimetableRow, BusStopRow } from '../types/spreadsheet'
-import { toSlashDate, toHyphenDate, formatTimeToHHmm } from '../lib/spreadsheetApi'
+import type { BasicSettingRow, GuardianMasterRow, SchoolTimetableRow, BusStopRow, ScheduleCalendarRow } from '../types/spreadsheet'
+import { toSlashDate, toHyphenDate, formatTimeToHHmm, formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
+import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const AdminDashboard: React.FC = () => {
   const { 
     user, logout, basicSettings, schedules, 
-    guardianMaster, busStops, schoolTimetable,
-    saveBasicSetting, saveGuardianMaster, saveSchoolTimetable,
+    guardianMaster, busStops, schoolTimetable, publishedMonths,
+    saveBasicSetting, saveMonthPublishStatus, saveGuardianMaster, saveSchoolTimetable, saveBatchSchoolTimetable,
     saveBusStop, deleteBusStop, registerNewStudentWithCode,
     deleteGuardianMaster,
     syncing, refreshAll 
@@ -157,6 +158,117 @@ export const AdminDashboard: React.FC = () => {
     return dateFilteredSchedules
   }, [dateFilteredSchedules, selectedTripFilter])
 
+  // 日付 -> 時刻表データのマップ
+  const timetableMap = useMemo(() => {
+    const map = new Map<string, SchoolTimetableRow>()
+    schoolTimetable.forEach(t => {
+      const norm = t.date.replace(/-/g, '/')
+      map.set(norm, t)
+    })
+    return map
+  }, [schoolTimetable])
+
+  // 下校便表記整形ユーティリティ（「下校1便(16:00)」「下校2便(17:00)」「乗らない」の形式に厳格統一）
+  const formatAfternoonTrip = (row: ScheduleCalendarRow): string => {
+    if (row.afternoon_status === '乗らない') return '乗らない'
+
+    const extractCleanTime = (raw?: string, fallbackRaw?: string): string => {
+      if (raw) {
+        const match = raw.match(/(\d{1,2}:\d{2})/)
+        if (match) return match[1]
+      }
+      if (fallbackRaw) {
+        const match = fallbackRaw.match(/(\d{1,2}:\d{2})/)
+        if (match) return match[1]
+      }
+      return ''
+    }
+
+    const tt = timetableMap.get(row.date.replace(/-/g, '/'))
+
+    if (row.afternoon_trip_1) {
+      const t = extractCleanTime(row.afternoon_trip_1, tt?.afternoon_trip_1)
+      return t ? `下校1便(${t})` : '下校1便'
+    }
+    if (row.afternoon_trip_2) {
+      const t = extractCleanTime(row.afternoon_trip_2, tt?.afternoon_trip_2)
+      return t ? `下校2便(${t})` : '下校2便'
+    }
+    if (row.afternoon_trip_3) {
+      const t = extractCleanTime(row.afternoon_trip_3, tt?.afternoon_trip_3)
+      return t ? `下校3便(${t})` : '下校3便'
+    }
+    return '未指定'
+  }
+
+  // 更新日時表記整形ユーティリティ（YYYY/MM/DD の日付のみ抽出、時刻非表示）
+  const formatUpdatedAt = (val?: string): string => {
+    if (!val) return '-'
+    const match = val.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
+    if (match) {
+      return `${match[1]}/${match[2].padStart(2, '0')}/${match[3].padStart(2, '0')}`
+    }
+    return val.split(' ')[0] || val
+  }
+
+  // バス停ごとのグループ化まとめ表示用データ（バス停マスタの停車順序 order 昇順で完全ソート）
+  const groupedFilteredSchedules = useMemo(() => {
+    // 1. バス停マスタのソート（order昇順、次点に到着時刻順）
+    const sortedStops = [...busStops].sort((a, b) => {
+      const orderA = Number(a.order) || 9999
+      const orderB = Number(b.order) || 9999
+      if (orderA !== orderB) return orderA - orderB
+      return (a.arrival_time_morning || '').localeCompare(b.arrival_time_morning || '')
+    })
+
+    // 2. 各バス停に属する生徒予約の振り分け
+    const stopMap = new Map<string, ScheduleCalendarRow[]>()
+    sortedStops.forEach(stop => {
+      stopMap.set(stop.name, [])
+    })
+
+    const otherSchedules: ScheduleCalendarRow[] = []
+
+    filteredSchedules.forEach(row => {
+      const stopName = studentBusStopMap.get(row.student_name)
+      if (stopName && stopMap.has(stopName)) {
+        stopMap.get(stopName)!.push(row)
+      } else {
+        otherSchedules.push(row)
+      }
+    })
+
+    const groups: Array<{
+      busStopName: string
+      order: number
+      arrivalTime?: string
+      schedules: ScheduleCalendarRow[]
+    }> = []
+
+    sortedStops.forEach(stop => {
+      const list = stopMap.get(stop.name) || []
+      if (list.length > 0) {
+        groups.push({
+          busStopName: stop.name,
+          order: Number(stop.order) || 0,
+          arrivalTime: stop.arrival_time_morning,
+          schedules: list
+        })
+      }
+    })
+
+    if (otherSchedules.length > 0) {
+      groups.push({
+        busStopName: 'その他・バス停未設定',
+        order: 9999,
+        arrivalTime: '',
+        schedules: otherSchedules
+      })
+    }
+
+    return groups
+  }, [busStops, filteredSchedules, studentBusStopMap])
+
   // ==========================================
   // 3. 生徒・保護者マスター インライン編集
   // ※「基本_登校」「基本_下校」は保護者が各自決定するため、管理者画面からは変更せず既存値を維持
@@ -219,7 +331,7 @@ export const AdminDashboard: React.FC = () => {
   })
   const [isRegisteringStudent, setIsRegisteringStudent] = useState(false)
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
-  const [successToast, setSuccessToast] = useState<{ message: string; code?: string } | null>(null)
+  const [successToast, setSuccessToast] = useState<{ message: string; title?: string; code?: string } | null>(null)
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard.writeText(code)
@@ -349,6 +461,202 @@ export const AdminDashboard: React.FC = () => {
     setCurrentCalendarDate(new Date())
   }
 
+  // 表示中の年月文字列 (YYYY/MM)
+  const currentYearMonth = useMemo(() => {
+    const y = currentCalendarDate.getFullYear()
+    const m = String(currentCalendarDate.getMonth() + 1).padStart(2, '0')
+    return `${y}/${m}`
+  }, [currentCalendarDate])
+
+  // 表示中年月の確定・公開ステータス（publishedMonthsガードとbasicSettingsフォールバック両対応）
+  const isCurrentMonthPublished = useMemo(() => {
+    return publishedMonths.includes(currentYearMonth) || isMonthPublished(currentYearMonth, basicSettings)
+  }, [currentYearMonth, publishedMonths, basicSettings])
+
+  const [isTogglingPublish, setIsTogglingPublish] = useState(false)
+
+  // 確定・公開ステータスの切り替え
+  const handleToggleMonthPublish = async () => {
+    const nextPublished = !isCurrentMonthPublished
+    const confirmMsg = nextPublished
+      ? `【${currentYearMonth}】の時刻表を「確定・公開」しますか？\n\n確定すると保護者画面で予約受付が開始され、通知バナーが表示されます。`
+      : `【${currentYearMonth}】の時刻表を「未確定」に戻しますか？\n\n未確定に戻すと保護者画面の予約入力・変更がロック（非活性化）されます。`
+    
+    if (!window.confirm(confirmMsg)) return
+
+    setIsTogglingPublish(true)
+    try {
+      const res = await saveMonthPublishStatus({
+        yearMonth: currentYearMonth,
+        isPublished: nextPublished
+      })
+      if (res.success) {
+        setSuccessToast({
+          title: '時刻表公開ステータス更新',
+          message: res.message || `${currentYearMonth} のステータスを更新しました`
+        })
+      } else {
+        alert(`ステータス更新に失敗しました: ${res.message}`)
+      }
+    } catch (err: any) {
+      alert(`エラーが発生しました: ${err.message}`)
+    } finally {
+      setIsTogglingPublish(false)
+    }
+  }
+
+  // ==========================================
+  // 学校用時刻表 1か月分一括設定用状態
+  // ==========================================
+  const [isBatchTimetableModalOpen, setIsBatchTimetableModalOpen] = useState(false)
+  const [batchYear, setBatchYear] = useState<number>(() => currentCalendarDate.getFullYear())
+  const [batchMonth, setBatchMonth] = useState<number>(() => currentCalendarDate.getMonth() + 1)
+
+  // モーダルを開いた時に現在表示中の年月を初期値にセットする
+  const handleOpenBatchModal = () => {
+    setBatchYear(currentCalendarDate.getFullYear())
+    setBatchMonth(currentCalendarDate.getMonth() + 1)
+    setIsBatchTimetableModalOpen(true)
+  }
+
+  // 基本パターン（通常日・6時間授業）
+  const [basePattern, setBasePattern] = useState({
+    morning_trip: '07:30',
+    afternoon_trip_1: '16:00',
+    afternoon_trip_2: '17:00',
+    afternoon_trip_3: '18:00',
+    note: '通常運行',
+  })
+
+  // 特定曜日の特別パターン（水曜日など5時間授業の日）
+  const [hasSpecialPattern, setHasSpecialPattern] = useState(true)
+  const [specialDays, setSpecialDays] = useState<number[]>([3]) // 3: 水曜日 (1:月, 2:火, 3:水, 4:木, 5:金)
+  const [specialPattern, setSpecialPattern] = useState({
+    morning_trip: '07:30',
+    afternoon_trip_1: '15:00',
+    afternoon_trip_2: '16:00',
+    afternoon_trip_3: '',
+    note: '5時間授業',
+  })
+
+  const [isSavingBatchTimetable, setIsSavingBatchTimetable] = useState(false)
+
+  // 曜日選択の切り替え
+  const handleToggleSpecialDay = (dayVal: number) => {
+    setSpecialDays(prev => 
+      prev.includes(dayVal) 
+        ? prev.filter(d => d !== dayVal)
+        : [...prev, dayVal].sort((a, b) => a - b)
+    )
+  }
+
+  // 一括生成対象日のプレビュー計算
+  const batchPreviewSummary = useMemo(() => {
+    const daysInMonth = new Date(batchYear, batchMonth, 0).getDate()
+    let totalWeekdays = 0
+    let specialCount = 0
+    let baseCount = 0
+    let skipHolidayCount = 0
+    let skipWeekendCount = 0
+
+    const previewList: {
+      dateStr: string
+      dayOfWeek: number
+      dayNumber: number
+      holidayName?: string
+      type: 'special' | 'base' | 'weekend' | 'holiday'
+    }[] = []
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateObj = new Date(batchYear, batchMonth - 1, d)
+      const dow = dateObj.getDay()
+      const padM = String(batchMonth).padStart(2, '0')
+      const padD = String(d).padStart(2, '0')
+      const dateStr = `${batchYear}/${padM}/${padD}`
+      const hol = getJapaneseHolidayName(dateStr)
+
+      if (dow === 0 || dow === 6) {
+        skipWeekendCount++
+        previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, type: 'weekend' })
+      } else if (hol) {
+        skipHolidayCount++
+        previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, holidayName: hol, type: 'holiday' })
+      } else {
+        totalWeekdays++
+        if (hasSpecialPattern && specialDays.includes(dow)) {
+          specialCount++
+          previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, type: 'special' })
+        } else {
+          baseCount++
+          previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, type: 'base' })
+        }
+      }
+    }
+
+    return {
+      totalDays: daysInMonth,
+      totalWeekdays,
+      specialCount,
+      baseCount,
+      skipHolidayCount,
+      skipWeekendCount,
+      previewList
+    }
+  }, [batchYear, batchMonth, hasSpecialPattern, specialDays])
+
+  // 一括設定の実行・保存
+  const handleExecuteBatchTimetable = async () => {
+    if (batchPreviewSummary.totalWeekdays === 0) {
+      alert('生成対象となる平日がありません。')
+      return
+    }
+
+    setIsSavingBatchTimetable(true)
+    try {
+      const rowsToSave: Parameters<typeof saveBatchSchoolTimetable>[0] = []
+
+      batchPreviewSummary.previewList.forEach(item => {
+        if (item.type === 'special') {
+          rowsToSave.push({
+            date: item.dateStr,
+            morning_trip: formatTimeToHHmm(specialPattern.morning_trip),
+            afternoon_trip_1: formatTimeToHHmm(specialPattern.afternoon_trip_1),
+            afternoon_trip_2: formatTimeToHHmm(specialPattern.afternoon_trip_2),
+            afternoon_trip_3: formatTimeToHHmm(specialPattern.afternoon_trip_3),
+            note: specialPattern.note,
+            calendar_label: specialPattern.note || '5時間授業'
+          })
+        } else if (item.type === 'base') {
+          rowsToSave.push({
+            date: item.dateStr,
+            morning_trip: formatTimeToHHmm(basePattern.morning_trip),
+            afternoon_trip_1: formatTimeToHHmm(basePattern.afternoon_trip_1),
+            afternoon_trip_2: formatTimeToHHmm(basePattern.afternoon_trip_2),
+            afternoon_trip_3: formatTimeToHHmm(basePattern.afternoon_trip_3),
+            note: basePattern.note,
+            calendar_label: basePattern.note || '通常運行'
+          })
+        }
+      })
+
+      const res = await saveBatchSchoolTimetable(rowsToSave)
+      if (res.success) {
+        setIsBatchTimetableModalOpen(false)
+        setSuccessToast({
+          title: '学校用時刻表 一括反映完了',
+          message: `${rowsToSave.length}日分の時刻表を一括反映しました（${batchYear}年${batchMonth}月）`
+        })
+        setCurrentCalendarDate(new Date(batchYear, batchMonth - 1, 1))
+      } else {
+        alert(`一括保存に失敗しました: ${res.message}`)
+      }
+    } catch (err: any) {
+      alert(`エラーが発生しました: ${err.message}`)
+    } finally {
+      setIsSavingBatchTimetable(false)
+    }
+  }
+
   // 月間グリッド配列生成
   const calendarDays = useMemo(() => {
     const year = currentCalendarDate.getFullYear()
@@ -418,16 +726,6 @@ export const AdminDashboard: React.FC = () => {
 
     return days
   }, [currentCalendarDate])
-
-  // 日付 -> 時刻表データのマップ
-  const timetableMap = useMemo(() => {
-    const map = new Map<string, SchoolTimetableRow>()
-    schoolTimetable.forEach(t => {
-      const norm = t.date.replace(/-/g, '/')
-      map.set(norm, t)
-    })
-    return map
-  }, [schoolTimetable])
 
   // カレンダーセルクリック：特別運行日・運行時刻編集モーダルを開く
   const handleOpenTimetableModal = (dateStr: string) => {
@@ -680,7 +978,7 @@ export const AdminDashboard: React.FC = () => {
                 <CheckCircle2 className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-black text-emerald-300">新入生登録完了</div>
+                <div className="text-xs font-black text-emerald-300">{successToast.title || '新入生登録完了'}</div>
                 <div className="text-xs text-slate-200 font-bold truncate sm:whitespace-normal">
                   {successToast.message}
                 </div>
@@ -1346,47 +1644,75 @@ export const AdminDashboard: React.FC = () => {
                   <th className="py-3 px-3 text-center">下校便</th>
                   <th className="py-3 px-3">保護者メール</th>
                   <th className="py-3 px-3">備考</th>
-                  <th className="py-3 px-3 font-mono text-[10px]">更新日時</th>
+                  <th className="py-3 px-3 font-mono text-[10px]">更新日</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-medium">
-                {filteredSchedules.length > 0 ? (
-                  filteredSchedules.map((row, idx) => {
-                    const busStopName = studentBusStopMap.get(row.student_name) || '-'
-
+                {groupedFilteredSchedules.length > 0 ? (
+                  groupedFilteredSchedules.map((group) => {
                     return (
-                      <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                        <td className="py-3 px-3 font-mono text-slate-400">{row.date}</td>
-                        <td className="py-3 px-3 font-bold text-white text-sm">{row.student_name}</td>
-                        <td className="py-3 px-3 text-amber-300 font-bold">{busStopName}</td>
-                        <td className="py-3 px-3 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                            row.morning_status === '乗る'
-                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                              : 'text-slate-500 bg-slate-950'
-                          }`}>
-                            {row.morning_status === '乗る' ? '乗る' : '運休/不在'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                            row.afternoon_status === '乗らない'
-                              ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                              : row.afternoon_trip_1 ? 'bg-sky-500/20 text-sky-300'
-                              : row.afternoon_trip_2 ? 'bg-indigo-500/20 text-indigo-300'
-                              : row.afternoon_trip_3 ? 'bg-purple-500/20 text-purple-300'
-                              : 'text-slate-500 bg-slate-950'
-                          }`}>
-                            {row.afternoon_status === '乗らない' ? '乗らない' :
-                             row.afternoon_trip_1 ? `下校1便 (${row.afternoon_trip_1})` :
-                             row.afternoon_trip_2 ? `下校2便 (${row.afternoon_trip_2})` :
-                             row.afternoon_trip_3 ? `下校3便 (${row.afternoon_trip_3})` : '未指定'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3 text-slate-400 font-mono text-[11px]">{row.parent_email}</td>
-                        <td className="py-3 px-3 text-slate-300">{row.note || '-'}</td>
-                        <td className="py-3 px-3 font-mono text-[10px] text-slate-500">{row.updated_at || '-'}</td>
-                      </tr>
+                      <React.Fragment key={group.busStopName}>
+                        {/* バス停グループ見出しヘッダー（バス停マスタ停車順序でソート） */}
+                        <tr className="bg-slate-800/90 border-y-2 border-amber-500/30">
+                          <td colSpan={8} className="py-2.5 px-4 font-black text-amber-300">
+                            <div className="flex items-center justify-between">
+                              <span className="flex items-center gap-2 text-xs sm:text-sm">
+                                <span className="text-base">🚏</span>
+                                <span className="tracking-wide">{group.busStopName}</span>
+                                {group.arrivalTime && (
+                                  <span className="text-[11px] font-normal text-slate-400">
+                                    （予定 {formatTimeToHHmm(group.arrivalTime)}発）
+                                  </span>
+                                )}
+                              </span>
+                              <span className="px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 text-xs font-bold">
+                                {group.schedules.length}名
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+
+                        {/* 当該バス停に所属する生徒行 */}
+                        {group.schedules.map((row, idx) => {
+                          const tripDisplay = formatAfternoonTrip(row)
+                          const updatedDateDisplay = formatUpdatedAt(row.updated_at)
+
+                          return (
+                            <tr key={`${group.busStopName}-${row.id || row.student_name}-${idx}`} className="hover:bg-slate-800/40 transition-colors">
+                              <td className="py-3 px-3 font-mono text-slate-400">{row.date}</td>
+                              <td className="py-3 px-3 font-bold text-white text-sm">{row.student_name}</td>
+                              <td className="py-3 px-3 text-amber-300 font-bold">{group.busStopName}</td>
+                              <td className="py-3 px-3 text-center">
+                                <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                                  row.morning_status === '乗る'
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    : 'text-slate-500 bg-slate-950'
+                                }`}>
+                                  {row.morning_status === '乗る' ? '乗る' : '運休/不在'}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                                  tripDisplay === '乗らない'
+                                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                    : tripDisplay.startsWith('下校1便')
+                                    ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                                    : tripDisplay.startsWith('下校2便')
+                                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                                    : tripDisplay.startsWith('下校3便')
+                                    ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                    : 'text-slate-500 bg-slate-950'
+                                }`}>
+                                  {tripDisplay}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-slate-400 font-mono text-[11px]">{row.parent_email}</td>
+                              <td className="py-3 px-3 text-slate-300">{row.note || '-'}</td>
+                              <td className="py-3 px-3 font-mono text-[10px] text-slate-400">{updatedDateDisplay}</td>
+                            </tr>
+                          )
+                        })}
+                      </React.Fragment>
                     )
                   })
                 ) : (
@@ -1622,25 +1948,77 @@ export const AdminDashboard: React.FC = () => {
           {/* カレンダー表示 */}
           {timetableDisplayMode === 'calendar' && (
             <div className="bg-slate-900/80 border border-slate-850 rounded-3xl p-5 md:p-6 shadow-xl space-y-4">
-              {/* 年月ナビゲーション */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              {/* 年月ナビゲーション ＆ 公開ステータス / 確定ボタン */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <h4 className="text-lg md:text-xl font-black text-white tracking-wide">
                     {currentCalendarDate.getFullYear()}年 {currentCalendarDate.getMonth() + 1}月
                   </h4>
                   <button
                     type="button"
                     onClick={handleCurrentMonth}
-                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all"
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
                   >
                     今月
                   </button>
+
+                  {/* 公開ステータスバッジ */}
+                  {isCurrentMonthPublished ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-black shadow-sm shadow-emerald-500/10">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      予約受付中（確定・公開済）
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-black shadow-sm shadow-amber-500/10">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      未確定・ロック中（保護者入力不可）
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2">
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* 「確定・公開」トグルボタン */}
+                  <button
+                    type="button"
+                    onClick={handleToggleMonthPublish}
+                    disabled={isTogglingPublish}
+                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer shadow-md disabled:opacity-50 ${
+                      isCurrentMonthPublished
+                        ? 'bg-slate-800 hover:bg-rose-950/40 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40'
+                        : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 shadow-emerald-500/20'
+                    }`}
+                    title={isCurrentMonthPublished ? 'クリックで未確定（ロック）に戻します' : 'クリックで確定して保護者予約受付を開始します'}
+                  >
+                    {isTogglingPublish ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        <span>処理中...</span>
+                      </>
+                    ) : isCurrentMonthPublished ? (
+                      <>
+                        <Lock className="h-4 w-4 text-emerald-400" />
+                        <span>🔒 確定済（公開中） - クリックで未確定に戻す</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4 stroke-[3]" />
+                        <span>✅ この月の時刻表を確定して予約受付を開始する</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenBatchModal}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-md shadow-amber-500/20 transition-all cursor-pointer"
+                  >
+                    <span>📅</span>
+                    <span>1か月分を一括設定</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handlePrevMonth}
-                    className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all"
+                    className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer"
                     title="前月"
                   >
                     <ChevronLeft className="h-4 w-4" />
@@ -1648,7 +2026,7 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleNextMonth}
-                    className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all"
+                    className="p-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer"
                     title="次月"
                   >
                     <ChevronRight className="h-4 w-4" />
@@ -1670,6 +2048,9 @@ export const AdminDashboard: React.FC = () => {
                 <span className="flex items-center gap-1.5 font-bold text-purple-300">
                   <span className="w-2 h-2 rounded-full bg-purple-400 inline-block" /> 下校3便
                 </span>
+                <span className="flex items-center gap-1.5 font-bold text-rose-400">
+                  <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> 🎌 祝日
+                </span>
                 <span className="text-slate-500">※日付セルをクリックすると編集モーダルが開きます</span>
               </div>
 
@@ -1690,18 +2071,20 @@ export const AdminDashboard: React.FC = () => {
                 {/* 各日付セル */}
                 {calendarDays.map((day, idx) => {
                   const data = timetableMap.get(day.dateStr)
-                  const morningTime = (data?.morning_trip || '').trim()
-                  const trip1Time = (data?.afternoon_trip_1 || '').trim()
-                  const trip2Time = (data?.afternoon_trip_2 || '').trim()
-                  const trip3Time = (data?.afternoon_trip_3 || '').trim()
+                  const morningTime = formatTimeOnly(data?.morning_trip)
+                  const trip1Time = formatTimeOnly(data?.afternoon_trip_1)
+                  const trip2Time = formatTimeOnly(data?.afternoon_trip_2)
+                  const trip3Time = formatTimeOnly(data?.afternoon_trip_3)
 
-                  const hasMorning = morningTime !== '' && morningTime !== '-'
-                  const hasTrip1 = trip1Time !== '' && trip1Time !== '-'
-                  const hasTrip2 = trip2Time !== '' && trip2Time !== '-'
-                  const hasTrip3 = trip3Time !== '' && trip3Time !== '-'
+                  const hasMorning = morningTime !== ''
+                  const hasTrip1 = trip1Time !== ''
+                  const hasTrip2 = trip2Time !== ''
+                  const hasTrip3 = trip3Time !== ''
                   const label = (data?.calendar_label || '').trim()
                   const note = (data?.note || '').trim()
 
+                  const holidayName = getJapaneseHolidayName(day.dateStr)
+                  const isHoliday = !!holidayName
                   const isSun = day.dayOfWeek === 0
                   const isSat = day.dayOfWeek === 6
 
@@ -1714,17 +2097,19 @@ export const AdminDashboard: React.FC = () => {
                           ? 'bg-slate-950/40 border-slate-900/60 opacity-40 hover:opacity-80'
                           : day.isToday
                           ? 'bg-slate-900/90 border-amber-500/80 shadow-md shadow-amber-500/10 hover:border-amber-400'
+                          : isHoliday || isSun
+                          ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-500/60 hover:bg-rose-950/30'
                           : 'bg-slate-950/70 border-slate-800 hover:border-sky-500/60 hover:bg-slate-900/60'
                       }`}
                     >
-                      {/* セル上部：日付番号と行事ラベル */}
+                      {/* セル上部：日付番号と祝日バッジ・行事ラベル */}
                       <div className="flex items-start justify-between gap-1">
                         <span
                           className={`inline-flex items-center justify-center text-xs font-black rounded-lg ${
                             day.isToday
-                              ? 'bg-amber-500 text-slate-950 w-6 h-6'
-                              : isSun
-                              ? 'text-rose-400'
+                              ? 'bg-amber-500 text-slate-950 w-6 h-6 shadow-sm'
+                              : isHoliday || isSun
+                              ? 'text-rose-400 font-black'
                               : isSat
                               ? 'text-sky-400'
                               : 'text-slate-300'
@@ -1733,11 +2118,24 @@ export const AdminDashboard: React.FC = () => {
                           {day.dayNumber}
                         </span>
 
-                        {label && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold truncate max-w-[70px] md:max-w-[90px] border border-amber-500/30">
-                            {label}
-                          </span>
-                        )}
+                        <div className="flex flex-col items-end gap-1 max-w-[72%]">
+                          {holidayName && (
+                            <span 
+                              className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30 truncate max-w-full"
+                              title={`祝日: ${holidayName}`}
+                            >
+                              🎌 {holidayName}
+                            </span>
+                          )}
+                          {label && (
+                            <span 
+                              className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold truncate max-w-full border border-amber-500/30"
+                              title={label}
+                            >
+                              {label}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* セル中央：運行便情報バッジ（スプレッドシート値に基づく条件付き表示） */}
@@ -1825,7 +2223,14 @@ export const AdminDashboard: React.FC = () => {
                         return (
                           <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
                             <td className="py-3 px-3 font-mono font-bold text-amber-300">
-                              {date}
+                              <div className="flex flex-col gap-0.5">
+                                <span>{date}</span>
+                                {getJapaneseHolidayName(date) && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 w-fit font-sans">
+                                    🎌 {getJapaneseHolidayName(date)}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             {/* 登校便 */}
                             <td className="py-3 px-3">
@@ -2069,6 +2474,328 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* 学校用時刻表 1か月分一括設定モーダル */}
+      {/* ========================================================= */}
+      {isBatchTimetableModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-2xl w-full shadow-2xl space-y-6 my-8 animate-in fade-in zoom-in duration-150 max-h-[90vh] overflow-y-auto">
+            {/* モーダルヘッダー */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="text-base md:text-lg font-black text-white flex items-center gap-2">
+                  <span className="text-xl">📅</span>
+                  学校用時刻表 1か月分を一括設定
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  対象月の平日（月〜金）の便時刻を一律再生成・上書き更新します。土日祝は自動除外され、個別設定は維持されます。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsBatchTimetableModalOpen(false)}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all shrink-0"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* ① 対象年月選択 */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <label className="text-xs font-black text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-amber-400" />
+                ① 対象年月の選択
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400">年:</span>
+                  <select
+                    value={batchYear}
+                    onChange={(e) => setBatchYear(Number(e.target.value))}
+                    className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-sm font-bold text-white focus:outline-none focus:border-amber-400"
+                  >
+                    {[batchYear - 1, batchYear, batchYear + 1, batchYear + 2].map((y) => (
+                      <option key={y} value={y}>{y}年</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400">月:</span>
+                  <select
+                    value={batchMonth}
+                    onChange={(e) => setBatchMonth(Number(e.target.value))}
+                    className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-sm font-bold text-white focus:outline-none focus:border-amber-400"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <option key={m} value={m}>{m}月</option>
+                    ))}
+                  </select>
+                </div>
+                <span className="text-xs text-slate-400 font-medium ml-auto">
+                  全 {batchPreviewSummary.totalDays} 日間（平日稼働日: <strong className="text-emerald-400 font-bold">{batchPreviewSummary.totalWeekdays}日</strong>）
+                </span>
+              </div>
+            </div>
+
+            {/* ② 【基本パターン】（通常日・6時間授業） */}
+            <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                <label className="text-xs font-black text-sky-300 flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-sky-400" />
+                  ② 【基本パターン】（通常日・6時間授業）
+                </label>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-bold border border-sky-500/30">
+                  適用対象: {batchPreviewSummary.baseCount}日
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {/* 登校便 */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-amber-300">
+                    登校便 出発時刻
+                  </label>
+                  <input
+                    type="time"
+                    value={basePattern.morning_trip}
+                    onChange={(e) => setBasePattern(p => ({ ...p, morning_trip: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+                {/* 下校1便 */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-sky-300">
+                    下校1便 時刻
+                  </label>
+                  <input
+                    type="time"
+                    value={basePattern.afternoon_trip_1}
+                    onChange={(e) => setBasePattern(p => ({ ...p, afternoon_trip_1: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+                {/* 下校2便 */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-indigo-300">
+                    下校2便（空欄可）
+                  </label>
+                  <input
+                    type="time"
+                    value={basePattern.afternoon_trip_2}
+                    onChange={(e) => setBasePattern(p => ({ ...p, afternoon_trip_2: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-indigo-400"
+                  />
+                </div>
+                {/* 下校3便 */}
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-purple-300">
+                    下校3便（空欄可）
+                  </label>
+                  <input
+                    type="time"
+                    value={basePattern.afternoon_trip_3}
+                    onChange={(e) => setBasePattern(p => ({ ...p, afternoon_trip_3: e.target.value }))}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-purple-400"
+                  />
+                </div>
+              </div>
+
+              {/* 備考 */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-slate-400">
+                  備考・ラベル（空欄可）
+                </label>
+                <input
+                  type="text"
+                  value={basePattern.note}
+                  onChange={(e) => setBasePattern(p => ({ ...p, note: e.target.value }))}
+                  placeholder="例: 通常運行"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-sky-400"
+                />
+              </div>
+            </div>
+
+            {/* ③ 【特定曜日の特別パターン】（水曜日など5時間授業の日） */}
+            <div className={`bg-slate-950/80 border rounded-2xl p-4 space-y-4 transition-all ${
+              hasSpecialPattern ? 'border-amber-500/50 bg-amber-950/10' : 'border-slate-800 opacity-80'
+            }`}>
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
+                <label className="text-xs font-black text-amber-300 flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={hasSpecialPattern}
+                    onChange={(e) => setHasSpecialPattern(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 cursor-pointer"
+                  />
+                  <span>③ 【特定曜日の特別パターン】（5時間授業等）</span>
+                </label>
+                {hasSpecialPattern && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                    適用対象: {batchPreviewSummary.specialCount}日
+                  </span>
+                )}
+              </div>
+
+              {hasSpecialPattern && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  {/* 曜日選択チェックボタングループ */}
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-slate-300 block">
+                      適用曜日を選択（複数選択可）:
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { day: 1, label: '月曜日' },
+                        { day: 2, label: '火曜日' },
+                        { day: 3, label: '水曜日' },
+                        { day: 4, label: '木曜日' },
+                        { day: 5, label: '金曜日' }
+                      ].map(item => {
+                        const isSelected = specialDays.includes(item.day)
+                        return (
+                          <button
+                            key={item.day}
+                            type="button"
+                            onClick={() => handleToggleSpecialDay(item.day)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm font-black'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700 hover:text-white'
+                            }`}
+                          >
+                            {isSelected ? '✓ ' : ''}{item.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 特別曜日の便時刻設定 */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-amber-300">
+                        特別登校便 時刻
+                      </label>
+                      <input
+                        type="time"
+                        value={specialPattern.morning_trip}
+                        onChange={(e) => setSpecialPattern(p => ({ ...p, morning_trip: e.target.value }))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-sky-300">
+                        特別下校1便 時刻
+                      </label>
+                      <input
+                        type="time"
+                        value={specialPattern.afternoon_trip_1}
+                        onChange={(e) => setSpecialPattern(p => ({ ...p, afternoon_trip_1: e.target.value }))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-sky-400"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-indigo-300">
+                        特別下校2便（空欄可）
+                      </label>
+                      <input
+                        type="time"
+                        value={specialPattern.afternoon_trip_2}
+                        onChange={(e) => setSpecialPattern(p => ({ ...p, afternoon_trip_2: e.target.value }))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-purple-300">
+                        特別下校3便（空欄可）
+                      </label>
+                      <input
+                        type="time"
+                        value={specialPattern.afternoon_trip_3}
+                        onChange={(e) => setSpecialPattern(p => ({ ...p, afternoon_trip_3: e.target.value }))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-purple-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 備考（例: 5時間授業） */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300">
+                      備考・行事名
+                    </label>
+                    <input
+                      type="text"
+                      value={specialPattern.note}
+                      onChange={(e) => setSpecialPattern(p => ({ ...p, note: e.target.value }))}
+                      placeholder="例: 5時間授業"
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-amber-300 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ④ サマリーカード */}
+            <div className="bg-slate-950 border border-slate-800/80 rounded-2xl p-4 text-xs space-y-2">
+              <div className="font-bold text-white flex items-center justify-between">
+                <span>生成サマリー ({batchYear}年{batchMonth}月)</span>
+                <span className="text-emerald-400 font-bold">合計 {batchPreviewSummary.totalWeekdays} 日分反映</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-300 text-[11px]">
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block">基本パターン:</span>
+                  <span className="text-sky-300 font-bold text-sm">{batchPreviewSummary.baseCount} 日</span>
+                </div>
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block">特別パターン:</span>
+                  <span className="text-amber-300 font-bold text-sm">{batchPreviewSummary.specialCount} 日</span>
+                </div>
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block">祝日（除外）:</span>
+                  <span className="text-rose-400 font-bold text-sm">{batchPreviewSummary.skipHolidayCount} 日</span>
+                </div>
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block">土日（除外）:</span>
+                  <span className="text-slate-400 font-bold text-sm">{batchPreviewSummary.skipWeekendCount} 日</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400 pt-1 leading-relaxed">
+                ※ 対象平日は一律上書き再生成されます。土曜日・日曜日・祝日は自動的に除外されるため、行事登校日など個別に設定されたデータは保護・維持されます。
+              </p>
+            </div>
+
+            {/* モーダルフッター */}
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setIsBatchTimetableModalOpen(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteBatchTimetable}
+                disabled={isSavingBatchTimetable || batchPreviewSummary.totalWeekdays === 0}
+                className="px-5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-md shadow-amber-500/20 disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingBatchTimetable ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>一括反映中...</span>
+                  </>
+                ) : (
+                  <>
+                    <CalendarCheck className="h-4 w-4" />
+                    <span>{batchPreviewSummary.totalWeekdays}日分を一括反映する</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

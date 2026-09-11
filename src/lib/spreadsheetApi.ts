@@ -58,12 +58,13 @@ export function formatNowJ(): string {
 }
 
 /**
- * 時刻文字列を確実に「HH:mm」形式（日付部分を完全排除）に正規化
- * 例: "1899/12/30 07:45:00" -> "07:45"
- * 例: "07:45:00" -> "07:45"
- * 例: "7:45" -> "07:45"
+ * 時刻文字列・Dateから「H:mm」または「HH:mm」の時刻部分のみを安全に抽出（日付部分・英語曜日・ISO文字列を完全排除）
+ * 例: "Sat Dec 30 1899 07:30:00 GMT+0900" -> "07:30"
+ * 例: "7:30" -> "07:30"
+ * 例: "16:00:00" -> "16:00"
+ * 空欄、ハイフン、無効値の場合は空文字 '' を返す
  */
-export function formatTimeToHHmm(val: any): string {
+export function formatTimeOnly(val: any): string {
   if (!val && val !== 0) return ''
   if (val instanceof Date) {
     const h = String(val.getHours()).padStart(2, '0')
@@ -71,17 +72,25 @@ export function formatTimeToHHmm(val: any): string {
     return `${h}:${m}`
   }
   const str = String(val).trim()
-  if (!str) return ''
-
-  // 1. ISO/Date文字列または通常文字列から時:分を抽出
-  const match = str.match(/(?:(?:^|\s|T))(\d{1,2}):(\d{2})(?::\d{2})?/)
-  if (match) {
-    const h = match[1].padStart(2, '0')
-    const m = match[2].padStart(2, '0')
-    return `${h}:${m}`
+  if (!str || str === '-' || str === '--:--' || str === 'なし' || str === '運休' || str === 'null' || str === 'undefined') {
+    return ''
   }
 
-  // 2. Dateオブジェクトへのフォールバック変換
+  // 1. 正規表現で「時:分」部分を抽出（例: 7:30, 07:30, 16:00 等）
+  // 英語の日時文字列 "Sat Dec 30 1899 07:30:00 GMT+0900" や "1899/12/30 07:30" 等から時刻部分のみを抽出
+  const match = str.match(/(?:^|\s|T|[^\d:])(\d{1,2}):(\d{2})(?::\d{2})?(?:$|\s|[^\d:])/i) || str.match(/\b(\d{1,2}:\d{2})\b/)
+  if (match) {
+    const parts = match[0].match(/(\d{1,2}):(\d{2})/)
+    if (parts) {
+      const hNum = parseInt(parts[1], 10)
+      const mNum = parseInt(parts[2], 10)
+      if (hNum >= 0 && hNum < 24 && mNum >= 0 && mNum < 60) {
+        return `${String(hNum).padStart(2, '0')}:${String(mNum).padStart(2, '0')}`
+      }
+    }
+  }
+
+  // 2. Dateオブジェクトへの変換パース
   const d = new Date(str)
   if (!isNaN(d.getTime())) {
     const h = String(d.getHours()).padStart(2, '0')
@@ -89,7 +98,18 @@ export function formatTimeToHHmm(val: any): string {
     return `${h}:${m}`
   }
 
-  return str
+  // 3. 単独で "H:mm" または "HH:mm" の場合
+  if (/^\d{1,2}:\d{2}$/.test(str)) {
+    const [h, m] = str.split(':')
+    return `${h.padStart(2, '0')}:${m}`
+  }
+
+  // 日時文字列や無効な文字列は絶対にそのまま返さず空文字とする
+  return ''
+}
+
+export function formatTimeToHHmm(val: any): string {
+  return formatTimeOnly(val)
 }
 
 /**
@@ -216,7 +236,9 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
     afternoon_trip_3: String(row.afternoon_trip_3 || row['下校3便'] || '').trim(),
     note: String(row.note || row['備考'] || '').trim(),
     updated_at: String(row.updated_at || row['更新日時'] || '').trim(),
-    parent_email: String(row.parent_email || row['保護者メールアドレス'] || '').trim().toLowerCase()
+    parent_email: String(row.parent_email || row['保護者メールアドレス'] || '').trim().toLowerCase(),
+    morning_boarding: String(row.morning_boarding || row['登校乗車確認'] || '').trim(),
+    afternoon_boarding: String(row.afternoon_boarding || row['下校乗車確認'] || '').trim()
   })).filter(s => s.date && s.student_name)
 
   // ④ 基本設定・運休期間 (A: 設定名, B: 開始日, C: 終了日, D: 標準運行, E: 内容・時刻, F: 備考)
@@ -234,10 +256,10 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
   const rawTimetable = raw.schoolTimetable || raw['学校用時刻表'] || []
   const schoolTimetable: SchoolTimetableRow[] = (Array.isArray(rawTimetable) ? rawTimetable : []).map((row: any) => ({
     date: toSlashDate(row.date || row['日付'] || ''),
-    morning_trip: String(row.morning_trip || row['登校便'] || '').trim(),
-    afternoon_trip_1: String(row.afternoon_trip_1 || row['下校1便'] || '').trim(),
-    afternoon_trip_2: String(row.afternoon_trip_2 || row['下校2便'] || '').trim(),
-    afternoon_trip_3: String(row.afternoon_trip_3 || row['下校3便'] || '').trim(),
+    morning_trip: formatTimeOnly(row.morning_trip || row['登校便'] || ''),
+    afternoon_trip_1: formatTimeOnly(row.afternoon_trip_1 || row['下校1便'] || ''),
+    afternoon_trip_2: formatTimeOnly(row.afternoon_trip_2 || row['下校2便'] || ''),
+    afternoon_trip_3: formatTimeOnly(row.afternoon_trip_3 || row['下校3便'] || ''),
     note: String(row.note || row['備考'] || '').trim(),
     calendar_label: String(row.calendar_label || row['カレンダー表示用'] || '').trim()
   })).filter(t => t.date)
@@ -387,6 +409,31 @@ export async function saveBatchSchedulesToSheet(schedules: Array<{
 }
 
 /**
+ * 2-C. 運転手による乗車確認の記録（点呼タップ連動: action: "recordBoarding"）
+ */
+export async function recordBoardingToSheet(payload: {
+  date: string // YYYY/MM/DD
+  studentName: string
+  tripType: '登校' | '下校'
+  boarded: boolean
+  busStop?: string
+}): Promise<{ success: boolean; boardingValue?: string; message?: string }> {
+  const slashDate = toSlashDate(payload.date)
+  return sendGASPost({
+    action: 'recordBoarding',
+    date: slashDate,
+    rawDate: slashDate,
+    studentName: payload.studentName,
+    student_name: payload.studentName,
+    tripType: payload.tripType,
+    trip_type: payload.tripType,
+    boarded: payload.boarded,
+    busStop: payload.busStop || '',
+    bus_stop: payload.busStop || ''
+  })
+}
+
+/**
  * 3. 基本設定・運休期間の保存・セル更新（action: "saveBasicSetting"）
  */
 export async function saveBasicSettingToSheet(payload: {
@@ -406,6 +453,103 @@ export async function saveBasicSettingToSheet(payload: {
     content_time: payload.content_time || '',
     note: payload.note || ''
   })
+}
+
+/**
+ * 年月文字列を YYYY/MM 形式（例: 2026/09）に正規化
+ */
+export function normalizeYearMonth(ym: string): string {
+  if (!ym) return ''
+  const clean = ym.trim().replace(/-/g, '/')
+  const parts = clean.split('/')
+  if (parts.length < 2) return clean
+  const year = parts[0]
+  const month = (parts[1] || '1').padStart(2, '0')
+  return `${year}/${month}`
+}
+
+/**
+ * 3-2. 月間時刻表の確定・公開ステータスの保存（action: "saveMonthPublishStatus"）
+ */
+export async function saveMonthPublishStatusToSheet(payload: {
+  yearMonth: string // YYYY/MM (例: 2026/09)
+  isPublished: boolean
+}): Promise<{ success: boolean; message?: string; yearMonth?: string; isPublished?: boolean }> {
+  const normalizedYM = normalizeYearMonth(payload.yearMonth)
+
+  return sendGASPost({
+    action: 'saveMonthPublishStatus',
+    yearMonth: normalizedYM,
+    isPublished: payload.isPublished
+  })
+}
+
+/**
+ * 基本設定から特定年月の確定・公開ステータスを判定
+ * - PUBLISH_YYYY/MM および 時刻表公開_YYYY/MM のどちらが存在しても正しく確定（公開中）と判定するフォールバック
+ * - 2026/09 と 2026/9 の両形式に対応
+ */
+export function isMonthPublished(
+  yearMonth: string,
+  basicSettings: { setting_name: string; standard_operation?: string; content_time?: string; note?: string }[]
+): boolean {
+  if (!yearMonth || !basicSettings || !Array.isArray(basicSettings)) return false
+  const targetYM = normalizeYearMonth(yearMonth)
+  if (!targetYM) return false
+
+  const [year, month] = targetYM.split('/')
+  const shortMonth = String(parseInt(month, 10))
+  const ymShort = `${year}/${shortMonth}`
+
+  // 候補キー群（例: "時刻表公開_2026/09", "時刻表公開_2026/9", "PUBLISH_2026/09", "PUBLISH_2026/9" など）
+  const validExactKeys = [
+    `時刻表公開_${targetYM}`,
+    `時刻表公開_${ymShort}`,
+    `PUBLISH_${targetYM}`,
+    `PUBLISH_${ymShort}`,
+    `publish_${targetYM}`,
+    `publish_${ymShort}`,
+  ]
+
+  const found = basicSettings.find(b => {
+    if (!b || !b.setting_name) return false
+    const name = b.setting_name.trim()
+    if (validExactKeys.includes(name)) return true
+
+    if (name.startsWith('時刻表公開_')) {
+      const rest = name.replace('時刻表公開_', '')
+      if (normalizeYearMonth(rest) === targetYM) return true
+    }
+    if (name.toUpperCase().startsWith('PUBLISH_')) {
+      const rest = name.slice(8)
+      if (normalizeYearMonth(rest) === targetYM) return true
+    }
+    return false
+  })
+
+  if (!found) return false
+
+  const op = (found.standard_operation || '').trim().toLowerCase()
+  const ct = (found.content_time || '').trim().toLowerCase()
+  const note = (found.note || '').trim().toLowerCase()
+
+  // 明示的に非公開/未確定の場合は false
+  if (op === '非公開' || ct === '未確定' || op === 'unpublish' || op === 'false') {
+    return false
+  }
+
+  return (
+    op === '公開' ||
+    op === 'publish' ||
+    op === 'published' ||
+    op === 'true' ||
+    op === '1' ||
+    ct === '確定済' ||
+    ct === '確定' ||
+    ct === 'true' ||
+    ct === '1' ||
+    note.includes('予約受付中')
+  )
 }
 
 /**
@@ -457,6 +601,34 @@ export async function saveSchoolTimetableToSheet(payload: {
     afternoon_trip_3: payload.afternoon_trip_3 || '',
     note: payload.note || '',
     calendar_label: payload.calendar_label || ''
+  })
+}
+
+/**
+ * 5-2. 学校用時刻表の月間一括保存・更新（action: "saveBatchSchoolTimetable"）
+ */
+export async function saveBatchSchoolTimetableToSheet(timetables: {
+  date: string
+  morning_trip?: string
+  afternoon_trip_1?: string
+  afternoon_trip_2?: string
+  afternoon_trip_3?: string
+  note?: string
+  calendar_label?: string
+}[]): Promise<{ success: boolean; message?: string; count?: number; updatedCount?: number; insertedCount?: number }> {
+  const formatted = timetables.map(t => ({
+    date: toSlashDate(t.date),
+    morning_trip: t.morning_trip || '',
+    afternoon_trip_1: t.afternoon_trip_1 || '',
+    afternoon_trip_2: t.afternoon_trip_2 || '',
+    afternoon_trip_3: t.afternoon_trip_3 || '',
+    note: t.note || '',
+    calendar_label: t.calendar_label || ''
+  }))
+
+  return sendGASPost({
+    action: 'saveBatchSchoolTimetable',
+    timetables: formatted
   })
 }
 

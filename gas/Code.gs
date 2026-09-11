@@ -105,10 +105,18 @@ function handleRequest(params, method) {
         return createJsonResponse(getBasicSettingsFromSheet());
       case 'saveBasicSetting':
         return createJsonResponse(saveBasicSettingToSheet(params));
+      case 'saveMonthPublishStatus':
+        return createJsonResponse(saveMonthPublishStatusToSheet(params));
+      case 'getMonthPublishStatus':
+        return createJsonResponse(getMonthPublishStatusFromSheet(params));
       case 'getSchoolTimetable':
         return createJsonResponse(getSchoolTimetableFromSheet());
       case 'saveSchoolTimetable':
         return createJsonResponse(saveSchoolTimetableToSheet(params));
+      case 'saveBatchSchoolTimetable':
+        return createJsonResponse(saveBatchSchoolTimetableToSheet(params));
+      case 'recordBoarding':
+        return createJsonResponse(recordBoardingToSheet(params));
       case 'getUserPermissions':
         return createJsonResponse(getUserPermissionsFromSheet());
       case 'verifyStudent':
@@ -168,13 +176,16 @@ function formatTimeToHHmmGAS(val) {
     return hh + ':' + mm;
   }
   const str = String(val).trim();
-  if (!str) return '';
+  if (!str || str === '-' || str === '--:--' || str === 'なし' || str === '運休') return '';
 
-  const match = str.match(/(?:(?:^|\s|T))(\d{1,2}):(\d{2})(?::\d{2})?/);
+  const match = str.match(/(?:^|\s|T|[^\d:])(\d{1,2}):(\d{2})(?::\d{2})?(?:$|\s|[^\d:])/i) || str.match(/\b(\d{1,2}:\d{2})\b/);
   if (match) {
-    const hh = ('0' + match[1]).slice(-2);
-    const mm = ('0' + match[2]).slice(-2);
-    return hh + ':' + mm;
+    const parts = match[0].match(/(\d{1,2}):(\d{2})/);
+    if (parts) {
+      const hh = ('0' + parts[1]).slice(-2);
+      const mm = ('0' + parts[2]).slice(-2);
+      return hh + ':' + mm;
+    }
   }
 
   const d = new Date(str);
@@ -184,7 +195,12 @@ function formatTimeToHHmmGAS(val) {
     return hh + ':' + mm;
   }
 
-  return str;
+  if (/^\d{1,2}:\d{2}$/.test(str)) {
+    const p = str.split(':');
+    return ('0' + p[0]).slice(-2) + ':' + ('0' + p[1]).slice(-2);
+  }
+
+  return '';
 }
 
 /**
@@ -219,8 +235,17 @@ function saveReservationToSheet(data) {
     sheet = ss.insertSheet(sheetName);
     sheet.appendRow([
       'ID', '日付', '生徒名', '登校ステータス', '下校ステータス',
-      '下校1便', '下校2便', '下校3便', '備考', '更新日時', '保護者メールアドレス'
+      '下校1便', '下校2便', '下校3便', '備考', '更新日時', '保護者メールアドレス',
+      '登校乗車確認', '下校乗車確認'
     ]);
+  } else {
+    // 12列目・13列目のヘッダーが存在しない場合は補完
+    if (sheet.getLastColumn() < 12 || !sheet.getRange(1, 12).getValue()) {
+      sheet.getRange(1, 12).setValue('登校乗車確認');
+    }
+    if (sheet.getLastColumn() < 13 || !sheet.getRange(1, 13).getValue()) {
+      sheet.getRange(1, 13).setValue('下校乗車確認');
+    }
   }
 
   // B列: 日付 (YYYY/MM/DD)
@@ -417,7 +442,8 @@ function getSchedulesFromSheet(email) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return { status: 'success', data: [] };
 
-  const values = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+  const numCols = Math.max(sheet.getLastColumn(), 13);
+  const values = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
 
   const results = [];
@@ -427,6 +453,9 @@ function getSchedulesFromSheet(email) {
     if (cleanEmail && rowEmail && rowEmail !== cleanEmail) {
       continue;
     }
+
+    const morningBoarding = String(row[11] || '').trim();
+    const afternoonBoarding = String(row[12] || '').trim();
 
     results.push({
       'ID': row[0],
@@ -440,6 +469,8 @@ function getSchedulesFromSheet(email) {
       '備考': String(row[8] || '').trim(),
       '更新日時': String(row[9] || '').trim(),
       '保護者メールアドレス': rowEmail,
+      '登校乗車確認': morningBoarding,
+      '下校乗車確認': afternoonBoarding,
       // 英名エイリアス互換
       id: row[0],
       date: formatDateToSlash(row[1]),
@@ -451,11 +482,154 @@ function getSchedulesFromSheet(email) {
       trip_3: String(row[7] || '').trim(),
       note: String(row[8] || '').trim(),
       updated_at: String(row[9] || '').trim(),
-      guardian_email: rowEmail
+      guardian_email: rowEmail,
+      morning_boarding: morningBoarding,
+      afternoon_boarding: afternoonBoarding
     });
   }
 
   return { status: 'success', data: results };
+}
+
+/**
+ * 3-B. 運転手による乗車確認の記録（点呼タップ連動）
+ * パラメータ: date, studentName, tripType ('登校' | '下校'), boarded (true | false), busStop
+ * 運行予定カレンダーシートの12列目（登校乗車確認）または13列目（下校乗車確認）に時刻を即時保存
+ */
+function recordBoardingToSheet(params) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheetName = '運行予定カレンダー';
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow([
+      'ID', '日付', '生徒名', '登校ステータス', '下校ステータス',
+      '下校1便', '下校2便', '下校3便', '備考', '更新日時', '保護者メールアドレス',
+      '登校乗車確認', '下校乗車確認'
+    ]);
+  } else {
+    if (sheet.getLastColumn() < 12 || !sheet.getRange(1, 12).getValue()) {
+      sheet.getRange(1, 12).setValue('登校乗車確認');
+    }
+    if (sheet.getLastColumn() < 13 || !sheet.getRange(1, 13).getValue()) {
+      sheet.getRange(1, 13).setValue('下校乗車確認');
+    }
+  }
+
+  const dateStr = formatDateToSlash(params.date || params.rawDate);
+  const studentName = String(params.studentName || params.student_name || params['生徒名'] || '').trim();
+  const tripType = String(params.tripType || params.trip_type || params['便種別'] || '').trim();
+  const isMorning = (tripType === '登校' || tripType === 'morning');
+  const targetCol = isMorning ? 12 : 13; // 12: 登校乗車確認, 13: 下校乗車確認
+
+  const isBoarded = (params.boarded === true || params.boarded === 'true' || params.boarded === 1 || params.boarded === '1');
+  const busStop = String(params.busStop || params.bus_stop || params['バス停'] || '').trim();
+
+  // 乗車時刻値の生成（HH:mm）
+  let boardingValue = '';
+  if (isBoarded) {
+    const d = new Date();
+    const hh = ('0' + d.getHours()).slice(-2);
+    const mm = ('0' + d.getMinutes()).slice(-2);
+    const timeStr = hh + ':' + mm;
+    boardingValue = busStop ? (timeStr + ' (' + busStop + ')') : timeStr;
+  }
+
+  const lastRow = sheet.getLastRow();
+  let targetRow = -1;
+  let currentId = null;
+
+  // 既存行検索: B列(日付) と C列(生徒名)
+  if (lastRow >= 2) {
+    const dataRange = sheet.getRange(2, 1, lastRow - 1, 3);
+    const rows = dataRange.getValues();
+    for (let i = 0; i < rows.length; i++) {
+      const rowDate = formatDateToSlash(rows[i][1]);
+      const rowStudent = String(rows[i][2]).trim();
+      if (rowDate === dateStr && rowStudent === studentName) {
+        targetRow = i + 2;
+        currentId = rows[i][0];
+        break;
+      }
+    }
+  }
+
+  const currentDateTime = formatCurrentDateTimeJ();
+
+  if (targetRow > 0) {
+    // 既存行の該当乗車確認列をピンポイント更新
+    sheet.getRange(targetRow, targetCol).setValue(boardingValue);
+    sheet.getRange(targetRow, 10).setValue(currentDateTime); // J列: 更新日時
+
+    return {
+      status: 'success',
+      action: 'updated',
+      row: targetRow,
+      id: currentId,
+      date: dateStr,
+      studentName: studentName,
+      tripType: isMorning ? '登校' : '下校',
+      boarded: isBoarded,
+      boardingValue: boardingValue,
+      message: isBoarded ? ('乗車確認を記録しました: ' + boardingValue) : '乗車確認を取り消しました'
+    };
+  } else {
+    // 該当行がない場合（事前予約なしの当日臨時乗車等の安全策）
+    const newRow = lastRow + 1;
+    let newId = newRow - 1;
+    if (lastRow >= 2) {
+      const lastAValue = sheet.getRange(lastRow, 1).getValue();
+      if (!isNaN(lastAValue) && Number(lastAValue) > 0) {
+        newId = Number(lastAValue) + 1;
+      }
+    }
+
+    // 保護者メールアドレスの自動補完検索
+    let parentEmail = '';
+    try {
+      const gSheet = ss.getSheetByName('生徒・保護者マスター');
+      if (gSheet && gSheet.getLastRow() >= 2) {
+        const gData = gSheet.getRange(2, 1, gSheet.getLastRow() - 1, 5).getValues();
+        for (let gi = 0; gi < gData.length; gi++) {
+          const names = [gData[gi][1], gData[gi][2], gData[gi][3], gData[gi][4]].map(s => String(s || '').trim());
+          if (names.includes(studentName)) {
+            parentEmail = String(gData[gi][0] || '').trim().toLowerCase();
+            break;
+          }
+        }
+      }
+    } catch (e) {}
+
+    const rowValues = [
+      [
+        newId,
+        dateStr,
+        studentName,
+        isMorning ? '乗る' : '',
+        '',
+        '', '', '',
+        '運転手点呼自動作成',
+        currentDateTime,
+        parentEmail,
+        isMorning ? boardingValue : '',
+        !isMorning ? boardingValue : ''
+      ]
+    ];
+    sheet.getRange(newRow, 1, 1, 13).setValues(rowValues);
+
+    return {
+      status: 'success',
+      action: 'inserted',
+      row: newRow,
+      id: newId,
+      date: dateStr,
+      studentName: studentName,
+      tripType: isMorning ? '登校' : '下校',
+      boarded: isBoarded,
+      boardingValue: boardingValue,
+      message: isBoarded ? ('乗車確認（新規作成）を記録しました: ' + boardingValue) : '乗車確認を取り消しました'
+    };
+  }
 }
 
 /**
@@ -704,21 +878,29 @@ function getSchoolTimetableFromSheet() {
   const values = sheet.getRange(2, 1, lastRow - 1, 7).getValues();
   const results = [];
   for (let i = 0; i < values.length; i++) {
+    const morningTrip = formatTimeToHHmmGAS(values[i][1]);
+    const trip1 = formatTimeToHHmmGAS(values[i][2]);
+    const trip2 = formatTimeToHHmmGAS(values[i][3]);
+    const trip3 = formatTimeToHHmmGAS(values[i][4]);
+    const note = String(values[i][5] || '').trim();
+    const calDisplay = String(values[i][6] || '').trim();
+    const dateFormatted = formatDateToSlash(values[i][0]);
+
     results.push({
-      date: formatDateToSlash(values[i][0]),
-      morning_trip: String(values[i][1] || '').trim(),
-      trip_1: String(values[i][2] || '').trim(),
-      trip_2: String(values[i][3] || '').trim(),
-      trip_3: String(values[i][4] || '').trim(),
-      note: String(values[i][5] || '').trim(),
-      calendar_display: String(values[i][6] || '').trim(),
-      '日付': formatDateToSlash(values[i][0]),
-      '登校便': String(values[i][1] || '').trim(),
-      '下校1便': String(values[i][2] || '').trim(),
-      '下校2便': String(values[i][3] || '').trim(),
-      '下校3便': String(values[i][4] || '').trim(),
-      '備考': String(values[i][5] || '').trim(),
-      'カレンダー表示用': String(values[i][6] || '').trim()
+      date: dateFormatted,
+      morning_trip: morningTrip,
+      trip_1: trip1,
+      trip_2: trip2,
+      trip_3: trip3,
+      note: note,
+      calendar_display: calDisplay,
+      '日付': dateFormatted,
+      '登校便': morningTrip,
+      '下校1便': trip1,
+      '下校2便': trip2,
+      '下校3便': trip3,
+      '備考': note,
+      'カレンダー表示用': calDisplay
     });
   }
   return { status: 'success', data: results };
@@ -832,6 +1014,7 @@ function saveBasicSettingToSheet(params) {
       contentTime,
       note
     ]]);
+    SpreadsheetApp.flush();
     return {
       status: 'success',
       message: '基本設定を更新しました',
@@ -842,6 +1025,7 @@ function saveBasicSettingToSheet(params) {
   } else {
     // 存在しない場合は新規追加
     sheet.appendRow([settingName, startDate, endDate, standardOperation, contentTime, note]);
+    SpreadsheetApp.flush();
     return {
       status: 'success',
       message: '基本設定を新規追加しました',
@@ -850,6 +1034,118 @@ function saveBasicSettingToSheet(params) {
       setting_name: settingName
     };
   }
+}
+
+/**
+ * 13-2. 月間時刻表の確定・公開ステータス保存（管理者限定）
+ * A列（設定名）に「時刻表公開_YYYY/MM」および「PUBLISH_YYYY/MM」として保存
+ */
+function saveMonthPublishStatusToSheet(params) {
+  const ymRaw = String(params.yearMonth || params.year_month || params.month || '').trim().replace(/-/g, '/');
+  if (!ymRaw) {
+    return { status: 'error', message: '対象年月（yearMonth）が指定されていません' };
+  }
+  const parts = ymRaw.split('/');
+  if (parts.length < 2) {
+    return { status: 'error', message: '対象年月形式が不正です（例: 2026/09）' };
+  }
+  const year = parts[0];
+  const month = ('0' + parts[1]).slice(-2);
+  const yearMonth = year + '/' + month;
+  const settingName = '時刻表公開_' + yearMonth;
+  const publishKey = 'PUBLISH_' + yearMonth;
+
+  const isPublished = (params.isPublished === true || params.isPublished === 'true' || params.published === true || params.published === 'true');
+  const standardOperation = isPublished ? '公開' : '非公開';
+  const contentTime = isPublished ? '確定済' : '未確定';
+  const note = isPublished ? '予約受付中' : '時刻表調整中・ロック';
+  const startDate = yearMonth + '/01';
+  const daysInMonth = new Date(Number(year), Number(month), 0).getDate();
+  const endDate = yearMonth + '/' + ('0' + daysInMonth).slice(-2);
+
+  // 時刻表公開_YYYY/MM を保存/更新
+  const res1 = saveBasicSettingToSheet({
+    setting_name: settingName,
+    start_date: startDate,
+    end_date: endDate,
+    standard_operation: standardOperation,
+    content_time: contentTime,
+    note: note
+  });
+
+  // PUBLISH_YYYY/MM も保存/更新して互換性を完全保証
+  saveBasicSettingToSheet({
+    setting_name: publishKey,
+    start_date: startDate,
+    end_date: endDate,
+    standard_operation: standardOperation,
+    content_time: contentTime,
+    note: note
+  });
+
+  SpreadsheetApp.flush();
+
+  return {
+    status: res1.status,
+    message: isPublished ? `${yearMonth} の時刻表を「確定・公開（予約受付中）」に設定しました` : `${yearMonth} の時刻表を「未確定（予約ロック）」に戻しました`,
+    yearMonth: yearMonth,
+    isPublished: isPublished
+  };
+}
+
+/**
+ * 13-3. 月間時刻表の確定・公開ステータス取得
+ */
+function getMonthPublishStatusFromSheet(params) {
+  const res = getBasicSettingsFromSheet();
+  const settings = res.data || [];
+  const ymRaw = String(params && (params.yearMonth || params.year_month || params.month || '')).trim().replace(/-/g, '/');
+  
+  if (ymRaw) {
+    const parts = ymRaw.split('/');
+    const yearMonth = parts[0] + '/' + ('0' + parts[1]).slice(-2);
+    const targetKey1 = '時刻表公開_' + yearMonth;
+    const targetKey2 = 'PUBLISH_' + yearMonth;
+    const found = settings.find(function(b) {
+      return b.setting_name === targetKey1 || b.setting_name === targetKey2;
+    });
+    const isPub = !!(found && (
+      found.standard_operation === '公開' ||
+      found.standard_operation === 'publish' ||
+      found.content_time === '確定済' ||
+      found.content_time === '確定' ||
+      (found.note && found.note.indexOf('予約受付中') !== -1)
+    ));
+    return {
+      status: 'success',
+      yearMonth: yearMonth,
+      isPublished: isPub,
+      setting: found || null
+    };
+  }
+
+  const map = {};
+  for (let i = 0; i < settings.length; i++) {
+    const s = settings[i];
+    if (!s || !s.setting_name) continue;
+    let ym = '';
+    if (s.setting_name.indexOf('時刻表公開_') === 0) {
+      ym = s.setting_name.replace('時刻表公開_', '');
+    } else if (s.setting_name.indexOf('PUBLISH_') === 0) {
+      ym = s.setting_name.replace('PUBLISH_', '');
+    }
+    if (ym) {
+      const isPub = (
+        s.standard_operation === '公開' ||
+        s.standard_operation === 'publish' ||
+        s.content_time === '確定済' ||
+        s.content_time === '確定' ||
+        (s.note && s.note.indexOf('予約受付中') !== -1)
+      );
+      map[ym] = isPub;
+    }
+  }
+  return { status: 'success', publishStatuses: map };
 }
 
 /**
@@ -915,6 +1211,109 @@ function saveSchoolTimetableToSheet(params) {
       date: dateStr
     };
   }
+}
+
+/**
+ * 14-2. 学校用時刻表の月間一括保存・更新（管理者限定）
+ * A列（日付: YYYY/MM/DD）をキーに既存行を更新、未存在行は新規追加
+ */
+function saveBatchSchoolTimetableToSheet(params) {
+  const timetables = params.timetables || params.entries || params.data || (Array.isArray(params) ? params : []);
+  if (!Array.isArray(timetables) || timetables.length === 0) {
+    return { status: 'success', count: 0, message: '更新対象のデータがありません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('学校用時刻表');
+  if (!sheet) {
+    sheet = ss.insertSheet('学校用時刻表');
+    sheet.appendRow(['日付', '登校便', '下校1便', '下校2便', '下校3便', '備考', 'カレンダー表示用']);
+  }
+
+  const lastRow = sheet.getLastRow();
+  // 既存データ（A列の日付）をインデックス化
+  const existingMap = new Map();
+  if (lastRow >= 2) {
+    const dates = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < dates.length; i++) {
+      const dStr = formatDateToSlash(dates[i][0]);
+      if (dStr) {
+        existingMap.set(dStr, i + 2); // 1-based 行番号
+      }
+    }
+  }
+
+  let updatedCount = 0;
+  let insertedCount = 0;
+
+  if (lastRow >= 2) {
+    const fullRange = sheet.getRange(2, 1, lastRow - 1, 7);
+    const fullValues = fullRange.getValues();
+    const rowsToAdd = [];
+
+    for (let i = 0; i < timetables.length; i++) {
+      const item = timetables[i];
+      const dateStr = formatDateToSlash(item.date || item['日付'] || '');
+      if (!dateStr) continue;
+
+      const morningTrip = formatTimeToHHmmGAS(item.morning_trip || item['登校便'] || '');
+      const trip1 = formatTimeToHHmmGAS(item.afternoon_trip_1 || item.trip_1 || item['下校1便'] || '');
+      const trip2 = formatTimeToHHmmGAS(item.afternoon_trip_2 || item.trip_2 || item['下校2便'] || '');
+      const trip3 = formatTimeToHHmmGAS(item.afternoon_trip_3 || item.trip_3 || item['下校3便'] || '');
+      const note = String(item.note || item['備考'] || '').trim();
+      const calendarDisplay = String(item.calendar_label || item.calendar_display || item['カレンダー表示用'] || '').trim();
+
+      const rowIndex = existingMap.get(dateStr);
+      if (rowIndex !== undefined) {
+        const idx = rowIndex - 2;
+        fullValues[idx][1] = morningTrip;
+        fullValues[idx][2] = trip1;
+        fullValues[idx][3] = trip2;
+        fullValues[idx][4] = trip3;
+        fullValues[idx][5] = note;
+        fullValues[idx][6] = calendarDisplay;
+        updatedCount++;
+      } else {
+        rowsToAdd.push([dateStr, morningTrip, trip1, trip2, trip3, note, calendarDisplay]);
+        existingMap.set(dateStr, lastRow + rowsToAdd.length);
+        insertedCount++;
+      }
+    }
+
+    fullRange.setValues(fullValues);
+    if (rowsToAdd.length > 0) {
+      sheet.getRange(lastRow + 1, 1, rowsToAdd.length, 7).setValues(rowsToAdd);
+    }
+  } else {
+    const rowsToAdd = [];
+    for (let i = 0; i < timetables.length; i++) {
+      const item = timetables[i];
+      const dateStr = formatDateToSlash(item.date || item['日付'] || '');
+      if (!dateStr) continue;
+
+      const morningTrip = formatTimeToHHmmGAS(item.morning_trip || item['登校便'] || '');
+      const trip1 = formatTimeToHHmmGAS(item.afternoon_trip_1 || item.trip_1 || item['下校1便'] || '');
+      const trip2 = formatTimeToHHmmGAS(item.afternoon_trip_2 || item.trip_2 || item['下校2便'] || '');
+      const trip3 = formatTimeToHHmmGAS(item.afternoon_trip_3 || item.trip_3 || item['下校3便'] || '');
+      const note = String(item.note || item['備考'] || '').trim();
+      const calendarDisplay = String(item.calendar_label || item.calendar_display || item['カレンダー表示用'] || '').trim();
+
+      rowsToAdd.push([dateStr, morningTrip, trip1, trip2, trip3, note, calendarDisplay]);
+      insertedCount++;
+    }
+    if (rowsToAdd.length > 0) {
+      sheet.getRange(2, 1, rowsToAdd.length, 7).setValues(rowsToAdd);
+    }
+  }
+
+  const total = updatedCount + insertedCount;
+  return {
+    status: 'success',
+    message: `${total}日分の時刻表を一括反映しました（更新: ${updatedCount}件, 新規: ${insertedCount}件）`,
+    count: total,
+    updatedCount: updatedCount,
+    insertedCount: insertedCount
+  };
 }
 
 /**

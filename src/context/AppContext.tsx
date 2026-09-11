@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import type {
   AllMasterData,
   AuthUser,
@@ -14,14 +14,19 @@ import {
   saveReservationToSheet, 
   saveBatchSchedulesToSheet,
   saveBasicSettingToSheet,
+  saveMonthPublishStatusToSheet,
   saveGuardianMasterToSheet,
   saveSchoolTimetableToSheet,
+  saveBatchSchoolTimetableToSheet,
   saveBusStopToSheet,
   deleteBusStopFromSheet,
   registerNewStudentWithCodeToSheet,
   linkStudentWithCodeToSheet,
   deleteGuardianMasterFromSheet,
-  formatNowJ
+  recordBoardingToSheet,
+  formatNowJ,
+  normalizeYearMonth,
+  isMonthPublished
 } from '../lib/spreadsheetApi'
 
 // 過去のLocalStorageゴミを完全強制消去
@@ -46,15 +51,20 @@ interface AppContextType {
   basicSettings: BasicSettingRow[]
   schoolTimetable: SchoolTimetableRow[]
   userPermissions: UserPermissionRow[]
+  // 公開月リスト（ローカル保護ガード反映済）
+  publishedMonths: string[]
   // 操作
   login: (email: string) => Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }>
   logout: () => void
   refreshAll: () => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveBatchSchedules: (schedules: Parameters<typeof saveBatchSchedulesToSheet>[0]) => Promise<{ success: boolean; message?: string; total?: number; updatedCount?: number; insertedCount?: number }>
+  recordBoarding: (payload: { date: string; studentName: string; tripType: '登校' | '下校'; boarded: boolean; busStop?: string }) => Promise<{ success: boolean; boardingValue?: string; message?: string }>
   saveBasicSetting: (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveMonthPublishStatus: (payload: Parameters<typeof saveMonthPublishStatusToSheet>[0]) => Promise<{ success: boolean; message?: string; yearMonth?: string; isPublished?: boolean }>
   saveGuardianMaster: (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveSchoolTimetable: (payload: Parameters<typeof saveSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string }>
+  saveBatchSchoolTimetable: (timetables: Parameters<typeof saveBatchSchoolTimetableToSheet>[0]) => Promise<{ success: boolean; message?: string; count?: number }>
   saveBusStop: (payload: Parameters<typeof saveBusStopToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   deleteBusStop: (stopName: string) => Promise<{ success: boolean; message?: string }>
   registerNewStudentWithCode: (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }>
@@ -81,12 +91,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userPermissions: []
   })
 
+  // 確定・公開月のローカル保護ガード (key: YYYY/MM, value: boolean)
+  // 保存完了時に即座にセットされ、直後のバックグラウンドフェッチや反映遅延によるロールバックを防止
+  const [publishedGuard, setPublishedGuard] = useState<Record<string, boolean>>({})
+  const publishedGuardRef = useRef<Record<string, boolean>>({})
+  publishedGuardRef.current = publishedGuard
+
+  // 公開中（確定済）の年月リスト (例: ['2026/09'])
+  const publishedMonths = useMemo(() => {
+    const set = new Set<string>()
+    data.basicSettings.forEach(b => {
+      if (!b || !b.setting_name) return
+      let ym = ''
+      if (b.setting_name.startsWith('時刻表公開_')) {
+        ym = normalizeYearMonth(b.setting_name.replace('時刻表公開_', ''))
+      } else if (b.setting_name.toUpperCase().startsWith('PUBLISH_')) {
+        ym = normalizeYearMonth(b.setting_name.slice(8))
+      }
+      if (ym && isMonthPublished(ym, [b])) {
+        set.add(ym)
+      }
+    })
+
+    // ローカルガードで上書き適用
+    Object.entries(publishedGuard).forEach(([ym, isPub]) => {
+      if (isPub) {
+        set.add(ym)
+      } else {
+        set.delete(ym)
+      }
+    })
+
+    return Array.from(set).sort()
+  }, [data.basicSettings, publishedGuard])
+
   // スプレッドシート最新データの一括直接フェッチ
   const refreshAll = useCallback(async () => {
     setSyncing(true)
     setError(null)
     try {
       const master = await fetchSpreadsheetMaster()
+
+      // ガード適用：直近にローカルで保存・更新された確定ステータスをマージして古いスプレッドシートデータによるロールバックを防止
+      const activeGuard = publishedGuardRef.current
+      if (Object.keys(activeGuard).length > 0) {
+        const mergedSettings = [...master.basicSettings]
+        for (const [ym, isPub] of Object.entries(activeGuard)) {
+          const targetKeys = [`時刻表公開_${ym}`, `PUBLISH_${ym}`]
+          let matched = false
+          for (let i = 0; i < mergedSettings.length; i++) {
+            const setting = mergedSettings[i]
+            if (
+              targetKeys.includes(setting.setting_name) ||
+              (setting.setting_name.startsWith('時刻表公開_') && normalizeYearMonth(setting.setting_name.replace('時刻表公開_', '')) === ym) ||
+              (setting.setting_name.toUpperCase().startsWith('PUBLISH_') && normalizeYearMonth(setting.setting_name.slice(8)) === ym)
+            ) {
+              mergedSettings[i] = {
+                ...setting,
+                standard_operation: isPub ? '公開' : '非公開',
+                content_time: isPub ? '確定済' : '未確定',
+                note: isPub ? '予約受付中' : '時刻表調整中・ロック'
+              }
+              matched = true
+            }
+          }
+          if (!matched && isPub) {
+            const [y, m] = ym.split('/')
+            const daysInMonth = new Date(Number(y), Number(m), 0).getDate()
+            mergedSettings.push({
+              setting_name: `時刻表公開_${ym}`,
+              start_date: `${ym}/01`,
+              end_date: `${ym}/${String(daysInMonth).padStart(2, '0')}`,
+              standard_operation: '公開',
+              content_time: '確定済',
+              note: '予約受付中'
+            })
+            mergedSettings.push({
+              setting_name: `PUBLISH_${ym}`,
+              start_date: `${ym}/01`,
+              end_date: `${ym}/${String(daysInMonth).padStart(2, '0')}`,
+              standard_operation: '公開',
+              content_time: '確定済',
+              note: '予約受付中'
+            })
+          }
+        }
+        master.basicSettings = mergedSettings
+      }
+
       setData(master)
     } catch (err: any) {
       console.error('[AppContext] Failed to refresh spreadsheet data:', err)
@@ -320,6 +412,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
+  // 運転手による乗車確認記録（楽観的UI更新 + GAS連動）
+  const handleRecordBoarding = async (payload: {
+    date: string
+    studentName: string
+    tripType: '登校' | '下校'
+    boarded: boolean
+    busStop?: string
+  }): Promise<{ success: boolean; boardingValue?: string; message?: string }> => {
+    const slashDate = payload.date.replace(/-/g, '/')
+    const isMorning = payload.tripType === '登校'
+    const now = new Date()
+    const hh = String(now.getHours()).padStart(2, '0')
+    const mm = String(now.getMinutes()).padStart(2, '0')
+    const timeStr = `${hh}:${mm}`
+    const expectedVal = payload.boarded
+      ? (payload.busStop ? `${timeStr} (${payload.busStop})` : timeStr)
+      : ''
+
+    // 1. 楽観的UI更新（ローカルの schedules を即座に更新）
+    setData(prev => {
+      let found = false
+      const updatedSchedules = prev.schedules.map(s => {
+        if (s.date.replace(/-/g, '/') === slashDate && s.student_name === payload.studentName) {
+          found = true
+          return {
+            ...s,
+            morning_boarding: isMorning ? expectedVal : s.morning_boarding,
+            afternoon_boarding: !isMorning ? expectedVal : s.afternoon_boarding,
+            updated_at: formatNowJ()
+          }
+        }
+        return s
+      })
+
+      if (!found) {
+        // 未予約日の臨時乗車の場合でもローカルレコードを追加
+        updatedSchedules.push({
+          id: `temp-${Date.now()}`,
+          date: slashDate,
+          student_name: payload.studentName,
+          morning_status: isMorning ? '乗る' : '',
+          afternoon_status: '',
+          afternoon_trip_1: '',
+          afternoon_trip_2: '',
+          afternoon_trip_3: '',
+          note: '',
+          updated_at: formatNowJ(),
+          parent_email: '',
+          morning_boarding: isMorning ? expectedVal : '',
+          afternoon_boarding: !isMorning ? expectedVal : ''
+        })
+      }
+
+      return {
+        ...prev,
+        schedules: updatedSchedules
+      }
+    })
+
+    // 2. バックグラウンドで GAS に送信
+    try {
+      const res = await recordBoardingToSheet({
+        date: slashDate,
+        studentName: payload.studentName,
+        tripType: payload.tripType,
+        boarded: payload.boarded,
+        busStop: payload.busStop
+      })
+
+      if (res.success && res.boardingValue !== undefined) {
+        // サーバー側確定値（実記録時刻）で上書き同期
+        setData(prev => ({
+          ...prev,
+          schedules: prev.schedules.map(s => {
+            if (s.date.replace(/-/g, '/') === slashDate && s.student_name === payload.studentName) {
+              return {
+                ...s,
+                morning_boarding: isMorning ? res.boardingValue : s.morning_boarding,
+                afternoon_boarding: !isMorning ? res.boardingValue : s.afternoon_boarding
+              }
+            }
+            return s
+          })
+        }))
+      }
+      return res
+    } catch (err: any) {
+      console.error('recordBoarding failed:', err)
+      return { success: false, message: err.message || '乗車確認の送信に失敗しました' }
+    }
+  }
+
   // 基本設定・運休期間の保存
   const handleSaveBasicSetting = async (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => {
     setSyncing(true)
@@ -345,6 +529,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { ...prev, basicSettings: updated }
         })
         // その後GASから再同期
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 月間時刻表の確定・公開ステータス保存
+  const handleSaveMonthPublishStatus = async (payload: Parameters<typeof saveMonthPublishStatusToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const normalizedYM = normalizeYearMonth(payload.yearMonth)
+      const isPub = payload.isPublished
+
+      // 1. GASへの書き込みレスポンスを await で確実に完了待ち
+      const res = await saveMonthPublishStatusToSheet({
+        yearMonth: normalizedYM,
+        isPublished: isPub
+      })
+
+      if (res.success) {
+        // 2. 保存成功時はローカルの公開月ガードに即座に保持（直後のfetchやバックグラウンド更新でロールバックしないよう完全保護）
+        publishedGuardRef.current = {
+          ...publishedGuardRef.current,
+          [normalizedYM]: isPub
+        }
+        setPublishedGuard(prev => ({
+          ...prev,
+          [normalizedYM]: isPub
+        }))
+
+        // 3. ローカルステート（data.basicSettings）に 時刻表公開_ と PUBLISH_ の両キーを即座に反映
+        setData(prev => {
+          const targetKeys = [`時刻表公開_${normalizedYM}`, `PUBLISH_${normalizedYM}`]
+          const [year, month] = normalizedYM.split('/')
+          const daysInMonth = new Date(Number(year), Number(month), 0).getDate()
+
+          let foundAny = false
+          const updated = prev.basicSettings.map(b => {
+            if (
+              targetKeys.includes(b.setting_name) ||
+              (b.setting_name.startsWith('時刻表公開_') && normalizeYearMonth(b.setting_name.replace('時刻表公開_', '')) === normalizedYM) ||
+              (b.setting_name.toUpperCase().startsWith('PUBLISH_') && normalizeYearMonth(b.setting_name.slice(8)) === normalizedYM)
+            ) {
+              foundAny = true
+              return {
+                ...b,
+                standard_operation: isPub ? '公開' : '非公開',
+                content_time: isPub ? '確定済' : '未確定',
+                note: isPub ? '予約受付中' : '時刻表調整中・ロック'
+              }
+            }
+            return b
+          })
+
+          if (!foundAny) {
+            updated.push({
+              setting_name: `時刻表公開_${normalizedYM}`,
+              start_date: `${normalizedYM}/01`,
+              end_date: `${normalizedYM}/${String(daysInMonth).padStart(2, '0')}`,
+              standard_operation: isPub ? '公開' : '非公開',
+              content_time: isPub ? '確定済' : '未確定',
+              note: isPub ? '予約受付中' : '時刻表調整中・ロック'
+            })
+            updated.push({
+              setting_name: `PUBLISH_${normalizedYM}`,
+              start_date: `${normalizedYM}/01`,
+              end_date: `${normalizedYM}/${String(daysInMonth).padStart(2, '0')}`,
+              standard_operation: isPub ? '公開' : '非公開',
+              content_time: isPub ? '確定済' : '未確定',
+              note: isPub ? '予約受付中' : '時刻表調整中・ロック'
+            })
+          }
+          return { ...prev, basicSettings: updated }
+        })
+
+        // 4. 最新データを再同期（ガードが適用されるため上書きロールバックされない）
         await refreshAll()
       }
       return res
@@ -427,6 +689,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ]
           }
           return { ...prev, schoolTimetable: updated }
+        })
+        await refreshAll()
+      }
+      return res
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // 学校用時刻表の月間一括保存
+  const handleSaveBatchSchoolTimetable = async (timetables: Parameters<typeof saveBatchSchoolTimetableToSheet>[0]) => {
+    setSyncing(true)
+    try {
+      const res = await saveBatchSchoolTimetableToSheet(timetables)
+      if (res.success) {
+        setData(prev => {
+          const timetableMap = new Map(prev.schoolTimetable.map(t => [t.date.replace(/-/g, '/'), t]))
+          timetables.forEach(t => {
+            const d = t.date.replace(/-/g, '/')
+            timetableMap.set(d, {
+              date: d,
+              morning_trip: t.morning_trip || '',
+              afternoon_trip_1: t.afternoon_trip_1 || '',
+              afternoon_trip_2: t.afternoon_trip_2 || '',
+              afternoon_trip_3: t.afternoon_trip_3 || '',
+              note: t.note || '',
+              calendar_label: t.calendar_label || ''
+            })
+          })
+          return {
+            ...prev,
+            schoolTimetable: Array.from(timetableMap.values())
+          }
         })
         await refreshAll()
       }
@@ -585,14 +880,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         basicSettings: data.basicSettings,
         schoolTimetable: data.schoolTimetable,
         userPermissions: data.userPermissions,
+        publishedMonths,
         login,
         logout,
         refreshAll,
         saveReservation: handleSaveReservation,
         saveBatchSchedules: handleSaveBatchSchedules,
+        recordBoarding: handleRecordBoarding,
         saveBasicSetting: handleSaveBasicSetting,
+        saveMonthPublishStatus: handleSaveMonthPublishStatus,
         saveGuardianMaster: handleSaveGuardianMaster,
         saveSchoolTimetable: handleSaveSchoolTimetable,
+        saveBatchSchoolTimetable: handleSaveBatchSchoolTimetable,
         saveBusStop: handleSaveBusStop,
         deleteBusStop: handleDeleteBusStop,
         registerNewStudentWithCode: handleRegisterNewStudentWithCode,

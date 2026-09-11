@@ -41,6 +41,9 @@ export interface ScheduleCalendarRow {
   note: string
   updated_at: string
   parent_email: string
+  // L列(12列目): 登校乗車確認 / M列(13列目): 下校乗車確認
+  morning_boarding?: string // 例: "07:42 (高山研修所前)"
+  afternoon_boarding?: string // 例: "15:10 (学校)"
 }
 
 // 4. シート名: 「基本設定・運休期間」
