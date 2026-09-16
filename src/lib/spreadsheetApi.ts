@@ -620,6 +620,8 @@ export async function saveGuardianMasterToSheet(payload: {
     student_name_2: payload.student_name_2 || '',
     student3: payload.student_name_3 || '',
     student4: payload.student_name_4 || '',
+    student_name_3: payload.student_name_3 || '',
+    student_name_4: payload.student_name_4 || '',
     busStop: payload.bus_stop_name || '',
     bus_stop_name: payload.bus_stop_name || '',
     memo: payload.note || '',
@@ -645,13 +647,14 @@ export async function saveSchoolTimetableToSheet(payload: {
 }): Promise<{ success: boolean; message?: string }> {
   return sendGASPost({
     action: 'saveSchoolTimetable',
-    date: toSlashDate(payload.date),
+    date: payload.date.replace(/-/g, '/'),
     morning_trip: payload.morning_trip || '',
     afternoon_trip_1: payload.afternoon_trip_1 || '',
     afternoon_trip_2: payload.afternoon_trip_2 || '',
     afternoon_trip_3: payload.afternoon_trip_3 || '',
     note: payload.note || '',
-    calendar_label: payload.calendar_label || ''
+    calendar_label: payload.calendar_label || '',
+    calendar_display: payload.calendar_label || ''
   })
 }
 
@@ -719,6 +722,8 @@ export async function deleteBusStopFromSheet(stopName: string): Promise<{ succes
 export async function registerNewStudentWithCodeToSheet(payload: {
   student_name: string
   student_name_2?: string
+  student_name_3?: string
+  student_name_4?: string
   bus_stop_name?: string
   note?: string
 }): Promise<{ success: boolean; status?: string; message?: string; code?: string; auth_code?: string; student_name?: string; [key: string]: any }> {
@@ -727,6 +732,8 @@ export async function registerNewStudentWithCodeToSheet(payload: {
     student_name: payload.student_name.trim(),
     student_name_1: payload.student_name.trim(),
     student_name_2: (payload.student_name_2 || '').trim(),
+    student_name_3: (payload.student_name_3 || '').trim(),
+    student_name_4: (payload.student_name_4 || '').trim(),
     bus_stop_name: payload.bus_stop_name || '',
     note: payload.note || ''
   })
@@ -738,7 +745,7 @@ export async function registerNewStudentWithCodeToSheet(payload: {
 export async function linkStudentWithCodeToSheet(payload: {
   email: string
   code: string
-}): Promise<{ success: boolean; status?: string; message?: string; student_name?: string; is_sibling?: boolean; [key: string]: any }> {
+}): Promise<{ success: boolean; status?: string; message?: string; student_name?: string; student_names?: string[]; is_sibling?: boolean; [key: string]: any }> {
   return sendGASPost({
     action: 'linkStudentWithCode',
     email: payload.email.trim().toLowerCase(),

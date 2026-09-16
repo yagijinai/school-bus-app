@@ -486,10 +486,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // B列・C列から生徒名一覧を抽出
+    // B〜E列から生徒名一覧（最大4名）を抽出
     const s1 = matched.student_name_1 || matched.student_names[0] || ''
     const s2 = matched.student_name_2 || matched.student_names[1] || ''
-    const studentNames = [s1, s2].filter(Boolean)
+    const s3 = matched.student_name_3 || matched.student_names[2] || ''
+    const s4 = matched.student_name_4 || matched.student_names[3] || ''
+    const studentNames = [s1, s2, s3, s4].filter(Boolean)
     if (studentNames.length === 0 && matched.student_names.length > 0) {
       studentNames.push(...matched.student_names)
     }
@@ -977,14 +979,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (isEmailMatch || isCodeMatch) {
               const s1 = payload.student_name_1 !== undefined ? payload.student_name_1 : g.student_name_1
               const s2 = payload.student_name_2 !== undefined ? payload.student_name_2 : g.student_name_2
-              const studentNames = [s1, s2].filter(Boolean) as string[]
+              const s3 = payload.student_name_3 !== undefined ? payload.student_name_3 : g.student_name_3
+              const s4 = payload.student_name_4 !== undefined ? payload.student_name_4 : g.student_name_4
+              const studentNames = [s1, s2, s3, s4].filter(Boolean) as string[]
               return {
                 ...g,
                 student_name_1: s1,
                 student_name_2: s2,
+                student_name_3: s3,
+                student_name_4: s4,
                 student_names: studentNames.length > 0 ? studentNames : g.student_names,
-                student_name_3: payload.student_name_3 !== undefined ? payload.student_name_3 : g.student_name_3,
-                student_name_4: payload.student_name_4 !== undefined ? payload.student_name_4 : g.student_name_4,
                 bus_stop_name: payload.bus_stop_name || g.bus_stop_name,
                 note: payload.note !== undefined ? payload.note : g.note,
                 default_morning: payload.default_morning !== undefined ? payload.default_morning : g.default_morning,
@@ -1189,13 +1193,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setData(fresh)
         // ログイン状態をセット/更新
         const cleanEmail = payload.email.trim().toLowerCase()
-        const guardianMatch = fresh.guardianMaster.find(g => g.parent_email.toLowerCase() === cleanEmail)
-        const studentName = res.student_name || guardianMatch?.student_names[0] || 'お子様'
-        setUser({
+        const guardianMatch = fresh.guardianMaster.find(g => g.parent_email && g.parent_email.toLowerCase() === cleanEmail)
+
+        // 統合後の全生徒リスト
+        const allNames = guardianMatch?.student_names || res.student_names || (res.student_name ? [res.student_name] : ['お子様'])
+        const newlyAdded = res.student_name || allNames[allNames.length - 1] || allNames[0]
+
+        const updatedUser: AuthUser = {
           email: cleanEmail,
-          name: `${studentName}の保護者`,
-          role: '保護者'
-        })
+          name: `${allNames[0] || 'お子様'}の保護者`,
+          role: '保護者',
+          studentName: newlyAdded, // 追加された妹・弟をアクティブに選択
+          studentNames: allNames,
+          authCode: guardianMatch?.auth_code || user?.authCode
+        }
+        try {
+          localStorage.setItem('school_bus_active_session_v2', JSON.stringify({
+            email: updatedUser.email,
+            name: updatedUser.name,
+            role: updatedUser.role,
+            studentName: updatedUser.studentName,
+            studentNames: updatedUser.studentNames,
+            authCode: updatedUser.authCode
+          }))
+        } catch (e) {
+          console.warn('[AppContext] Failed to persist session after linking sibling:', e)
+        }
+        setUser(updatedUser)
       }
       return res
     } finally {

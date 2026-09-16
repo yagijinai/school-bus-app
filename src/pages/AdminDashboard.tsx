@@ -300,6 +300,8 @@ export const AdminDashboard: React.FC = () => {
     const email = field === 'parent_email' ? val : (draft.parent_email !== undefined ? draft.parent_email : (g.parent_email || ''))
     const s1 = field === 'student_name_1' ? val : (draft.student_name_1 !== undefined ? draft.student_name_1 : (g.student_name_1 || g.student_names[0] || ''))
     const s2 = field === 'student_name_2' ? val : (draft.student_name_2 !== undefined ? draft.student_name_2 : (g.student_name_2 || g.student_names[1] || ''))
+    const s3 = field === 'student_name_3' ? val : (draft.student_name_3 !== undefined ? draft.student_name_3 : (g.student_name_3 || g.student_names[2] || ''))
+    const s4 = field === 'student_name_4' ? val : (draft.student_name_4 !== undefined ? draft.student_name_4 : (g.student_name_4 || g.student_names[3] || ''))
     const busStop = field === 'bus_stop_name' ? val : (draft.bus_stop_name !== undefined ? draft.bus_stop_name : (g.bus_stop_name || ''))
     const memo = field === 'note' ? val : (draft.note !== undefined ? draft.note : (g.note || ''))
     const defMorning = g.default_morning || '乗る'
@@ -312,6 +314,8 @@ export const AdminDashboard: React.FC = () => {
         auth_code: g.auth_code,
         student_name_1: s1,
         student_name_2: s2,
+        student_name_3: s3,
+        student_name_4: s4,
         bus_stop_name: busStop,
         note: memo,
         default_morning: defMorning,
@@ -329,11 +333,87 @@ export const AdminDashboard: React.FC = () => {
     }
   }
 
-  // 新入生・新規生徒（兄弟姉妹対応）の事前登録モーダル状態
+  // 卒業（繰り上げ）処理（長男B列が卒業すると、C列→B列、D列→C列、E列→D列へ1列ずつ左へ繰り上がり、末尾が空欄）
+  const handleGraduateStudent = async (g: GuardianMasterRow, rowKey: string, targetColIndex: 1 | 2 | 3 | 4) => {
+    const draft = guardianDrafts[rowKey] || {}
+    let s1 = draft.student_name_1 !== undefined ? draft.student_name_1 : (g.student_name_1 || g.student_names[0] || '')
+    let s2 = draft.student_name_2 !== undefined ? draft.student_name_2 : (g.student_name_2 || g.student_names[1] || '')
+    let s3 = draft.student_name_3 !== undefined ? draft.student_name_3 : (g.student_name_3 || g.student_names[2] || '')
+    let s4 = draft.student_name_4 !== undefined ? draft.student_name_4 : (g.student_name_4 || g.student_names[3] || '')
+
+    const targetName = targetColIndex === 1 ? s1 : targetColIndex === 2 ? s2 : targetColIndex === 3 ? s3 : s4
+    if (!targetName) return
+
+    const colLabel = targetColIndex === 1 ? '第1子' : targetColIndex === 2 ? '第2子' : targetColIndex === 3 ? '第3子' : '第4子'
+    if (!window.confirm(`「${targetName}」さん（${colLabel}）を卒業（繰り上げ）処理しますか？\n\n※後続の兄弟・姉妹が1列ずつ左へ繰り上がり、末尾が空欄になります。\n※スプレッドシートにも即座に自動反映されます。`)) {
+      return
+    }
+
+    if (targetColIndex === 1) {
+      s1 = s2
+      s2 = s3
+      s3 = s4
+      s4 = ''
+    } else if (targetColIndex === 2) {
+      s2 = s3
+      s3 = s4
+      s4 = ''
+    } else if (targetColIndex === 3) {
+      s3 = s4
+      s4 = ''
+    } else if (targetColIndex === 4) {
+      s4 = ''
+    }
+
+    // ドラフトステートを更新
+    setGuardianDrafts(prev => ({
+      ...prev,
+      [rowKey]: {
+        ...(prev[rowKey] || {}),
+        student_name_1: s1,
+        student_name_2: s2,
+        student_name_3: s3,
+        student_name_4: s4
+      }
+    }))
+
+    const email = draft.parent_email !== undefined ? draft.parent_email : (g.parent_email || '')
+    const busStop = draft.bus_stop_name !== undefined ? draft.bus_stop_name : (g.bus_stop_name || '')
+    const memo = draft.note !== undefined ? draft.note : (g.note || '')
+
+    setSavingGuardianKey(rowKey)
+    try {
+      const res = await saveGuardianMaster({
+        parent_email: email,
+        auth_code: g.auth_code,
+        student_name_1: s1,
+        student_name_2: s2,
+        student_name_3: s3,
+        student_name_4: s4,
+        bus_stop_name: busStop,
+        note: memo,
+        default_morning: g.default_morning || '乗る',
+        default_afternoon: g.default_afternoon || '1便'
+      })
+
+      if (res.success || (res as any).status === 'success') {
+        setSavedGuardianKey(rowKey)
+        setTimeout(() => setSavedGuardianKey(null), 2500)
+      } else {
+        alert(`卒業繰り上げ保存に失敗しました: ${res.message}`)
+      }
+    } finally {
+      setSavingGuardianKey(null)
+    }
+  }
+
+  // 新入生・新規生徒（兄弟姉妹対応・最大4名）の事前登録モーダル状態
   const [isAddStudentModalOpen, setIsAddStudentModalOpen] = useState(false)
   const [newStudentDraft, setNewStudentDraft] = useState({
     name: '', // 第1子氏名（B列・必須）
     student_name_2: '', // 第2子氏名（C列・任意/兄弟）
+    student_name_3: '', // 第3子氏名（D列・任意/兄弟）
+    student_name_4: '', // 第4子氏名（E列・任意/兄弟）
     bus_stop_name: '',
     note: ''
   })
@@ -395,6 +475,8 @@ export const AdminDashboard: React.FC = () => {
       const res: any = await registerNewStudentWithCode({
         student_name: newStudentDraft.name.trim(),
         student_name_2: newStudentDraft.student_name_2.trim(),
+        student_name_3: newStudentDraft.student_name_3.trim(),
+        student_name_4: newStudentDraft.student_name_4.trim(),
         bus_stop_name: newStudentDraft.bus_stop_name || (busStops[0]?.name || '高山研修所前'),
         note: newStudentDraft.note.trim()
       })
@@ -411,14 +493,20 @@ export const AdminDashboard: React.FC = () => {
         setNewStudentDraft({
           name: '',
           student_name_2: '',
+          student_name_3: '',
+          student_name_4: '',
           bus_stop_name: busStops[0]?.name || '',
           note: ''
         })
 
-        // 3. 成功トーストを表示（「登録を失敗しました」の誤表示を完全排除）
-        const studentDesc = newStudentDraft.student_name_2.trim()
-          ? `${newStudentDraft.name.trim()} / ${newStudentDraft.student_name_2.trim()}`
-          : newStudentDraft.name.trim()
+        // 3. 成功トーストを表示
+        const allRegisteredNames = [
+          newStudentDraft.name.trim(),
+          newStudentDraft.student_name_2.trim(),
+          newStudentDraft.student_name_3.trim(),
+          newStudentDraft.student_name_4.trim()
+        ].filter(Boolean)
+        const studentDesc = allRegisteredNames.join(' / ')
         const toastMsg = code
           ? `世帯生徒（${studentDesc}）を登録し、認証コードを発行しました（コード: ${code}）`
           : `世帯生徒（${studentDesc}）を登録し、認証コードを発行しました`
@@ -1766,6 +1854,8 @@ export const AdminDashboard: React.FC = () => {
                 setNewStudentDraft({
                   name: '',
                   student_name_2: '',
+                  student_name_3: '',
+                  student_name_4: '',
                   bus_stop_name: busStops[0]?.name || '',
                   note: ''
                 })
@@ -1782,12 +1872,14 @@ export const AdminDashboard: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 font-bold uppercase tracking-wider text-[11px]">
                 <tr>
-                  <th className="py-3 px-3 min-w-[160px]">保護者連絡先 (A列)</th>
-                  <th className="py-3 px-3 min-w-[130px]">第1子氏名 (B列)</th>
-                  <th className="py-3 px-3 min-w-[130px]">第2子氏名 (C列)</th>
-                  <th className="py-3 px-3 min-w-[160px]">登録バス停名 (F列)</th>
-                  <th className="py-3 px-3 min-w-[140px]">備考 (G列)</th>
-                  <th className="py-3 px-3 min-w-[140px] text-center">認証コード (J列)</th>
+                  <th className="py-3 px-3 min-w-[150px]">保護者連絡先 (A列)</th>
+                  <th className="py-3 px-2 min-w-[130px]">第1子氏名 (B列)</th>
+                  <th className="py-3 px-2 min-w-[130px]">第2子氏名 (C列)</th>
+                  <th className="py-3 px-2 min-w-[130px]">第3子氏名 (D列)</th>
+                  <th className="py-3 px-2 min-w-[130px]">第4子氏名 (E列)</th>
+                  <th className="py-3 px-3 min-w-[140px]">登録バス停名 (F列)</th>
+                  <th className="py-3 px-3 min-w-[120px]">備考 (G列)</th>
+                  <th className="py-3 px-3 min-w-[120px] text-center">認証コード (J列)</th>
                   <th className="py-3 px-3 w-20 text-center">保存状況</th>
                   <th className="py-3 px-3 w-14 text-center">削除</th>
                 </tr>
@@ -1799,6 +1891,8 @@ export const AdminDashboard: React.FC = () => {
                   const email = draft.parent_email !== undefined ? draft.parent_email : (g.parent_email || '')
                   const s1 = draft.student_name_1 !== undefined ? draft.student_name_1 : (g.student_name_1 || g.student_names[0] || '')
                   const s2 = draft.student_name_2 !== undefined ? draft.student_name_2 : (g.student_name_2 || g.student_names[1] || '')
+                  const s3 = draft.student_name_3 !== undefined ? draft.student_name_3 : (g.student_name_3 || g.student_names[2] || '')
+                  const s4 = draft.student_name_4 !== undefined ? draft.student_name_4 : (g.student_name_4 || g.student_names[3] || '')
                   const curBusStop = draft.bus_stop_name !== undefined ? draft.bus_stop_name : (g.bus_stop_name || '')
                   const curNote = draft.note !== undefined ? draft.note : (g.note || '')
 
@@ -1819,9 +1913,9 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </td>
 
-                      {/* B列: 第1子氏名（インライン編集・onBlurで自動保存） */}
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
+                      {/* B列: 第1子氏名（インライン編集＆卒業繰り上げ） */}
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">👦</span>
                           <input
                             type="text"
@@ -1829,14 +1923,24 @@ export const AdminDashboard: React.FC = () => {
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_1', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_1', e.target.value)}
                             placeholder="第1子氏名"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-white font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[90px]"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-white font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px]"
                           />
+                          {s1 && (
+                            <button
+                              type="button"
+                              title="第1子を卒業（繰り上げ）：第2子以降が1列ずつ左へ繰り上がります"
+                              onClick={() => handleGraduateStudent(g, rowKey, 1)}
+                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              卒業
+                            </button>
+                          )}
                         </div>
                       </td>
 
-                      {/* C列: 第2子氏名（兄弟用・インライン編集・onBlurで自動保存） */}
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
+                      {/* C列: 第2子氏名（インライン編集＆卒業繰り上げ） */}
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">👧</span>
                           <input
                             type="text"
@@ -1844,8 +1948,68 @@ export const AdminDashboard: React.FC = () => {
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_2', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_2', e.target.value)}
                             placeholder="第2子（任意）"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[90px] placeholder:text-slate-600 placeholder:font-normal"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
                           />
+                          {s2 && (
+                            <button
+                              type="button"
+                              title="第2子を卒業（繰り上げ）：第3子以降が1列ずつ左へ繰り上がります"
+                              onClick={() => handleGraduateStudent(g, rowKey, 2)}
+                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              卒業
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* D列: 第3子氏名（インライン編集＆卒業繰り上げ） */}
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm shrink-0">🧒</span>
+                          <input
+                            type="text"
+                            value={s3}
+                            onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_3', e.target.value)}
+                            onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_3', e.target.value)}
+                            placeholder="第3子（任意）"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
+                          />
+                          {s3 && (
+                            <button
+                              type="button"
+                              title="第3子を卒業（繰り上げ）：第4子が左へ繰り上がります"
+                              onClick={() => handleGraduateStudent(g, rowKey, 3)}
+                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              卒業
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* E列: 第4子氏名（インライン編集＆卒業繰り上げ） */}
+                      <td className="py-3 px-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-sm shrink-0">👶</span>
+                          <input
+                            type="text"
+                            value={s4}
+                            onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_4', e.target.value)}
+                            onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_4', e.target.value)}
+                            placeholder="第4子（任意）"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
+                          />
+                          {s4 && (
+                            <button
+                              type="button"
+                              title="第4子を卒業"
+                              onClick={() => handleGraduateStudent(g, rowKey, 4)}
+                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              卒業
+                            </button>
+                          )}
                         </div>
                       </td>
 
@@ -3180,6 +3344,32 @@ export const AdminDashboard: React.FC = () => {
                   value={newStudentDraft.student_name_2}
                   onChange={(e) => setNewStudentDraft(prev => ({ ...prev, student_name_2: e.target.value }))}
                   placeholder="例: 山田 花子（※兄弟姉妹がいる場合のみ入力）"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-sm font-bold text-white placeholder:text-slate-600 outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  第3子生徒名（兄弟の場合 / D列）
+                </label>
+                <input
+                  type="text"
+                  value={newStudentDraft.student_name_3}
+                  onChange={(e) => setNewStudentDraft(prev => ({ ...prev, student_name_3: e.target.value }))}
+                  placeholder="例: 山田 次郎（任意）"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-sm font-bold text-white placeholder:text-slate-600 outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-300 block">
+                  第4子生徒名（兄弟の場合 / E列）
+                </label>
+                <input
+                  type="text"
+                  value={newStudentDraft.student_name_4}
+                  onChange={(e) => setNewStudentDraft(prev => ({ ...prev, student_name_4: e.target.value }))}
+                  placeholder="例: 山田 三郎（任意）"
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-400 rounded-xl text-sm font-bold text-white placeholder:text-slate-600 outline-none"
                 />
               </div>

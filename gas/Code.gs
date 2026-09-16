@@ -91,6 +91,8 @@ function handleRequest(params, method) {
         return createJsonResponse(getGuardianMasterFromSheet());
       case 'saveGuardianMaster':
         return createJsonResponse(saveGuardianMasterToSheet(params));
+      case 'deleteGuardianMaster':
+        return createJsonResponse(deleteGuardianMasterFromSheet(params));
       case 'registerNewStudentWithCode':
         return createJsonResponse(registerNewStudentWithCodeToSheet(params));
       case 'linkStudentWithCode':
@@ -831,7 +833,11 @@ function getGuardianMasterFromSheet() {
  */
 function saveGuardianMasterToSheet(params) {
   const email = String(params.parentEmail || params.email || params['保護者メールアドレス'] || '').trim().toLowerCase();
-  if (!email) return { status: 'error', message: 'メールアドレスが必要です' };
+  const authCode = String(params.auth_code || params.code || params['認証コード'] || '').trim();
+
+  if (!email && !authCode) {
+    return { status: 'error', success: false, message: 'メールアドレスまたは認証コードが必要です' };
+  }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName('生徒・保護者マスター');
@@ -839,7 +845,7 @@ function saveGuardianMasterToSheet(params) {
     sheet = ss.insertSheet('生徒・保護者マスター');
     sheet.appendRow([
       '保護者メールアドレス', '生徒名１', '生徒名２', '生徒名３', '生徒名４',
-      '登録バス停名', '備考', '基本_登校', '基本_下校'
+      '登録バス停名', '備考', '基本_登校', '基本_下校', '認証コード'
     ]);
   }
 
@@ -856,25 +862,267 @@ function saveGuardianMasterToSheet(params) {
   let targetRow = -1;
 
   if (lastRow >= 2) {
-    const emails = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (let i = 0; i < emails.length; i++) {
-      if (String(emails[i][0]).trim().toLowerCase() === email) {
+    const numCols = Math.max(sheet.getLastColumn(), 10);
+    const data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+    for (let i = 0; i < data.length; i++) {
+      const rowEmail = String(data[i][0] || '').trim().toLowerCase();
+      const rowCode = String(data[i][9] || '').trim();
+      if (email && rowEmail === email) {
+        targetRow = i + 2;
+        break;
+      } else if (!email && authCode && rowCode.toUpperCase() === authCode.toUpperCase()) {
         targetRow = i + 2;
         break;
       }
     }
   }
 
-  const rowValues = [[email, s1, s2, s3, s4, busStop, memo, toSchool, fromSchool]];
-
   if (targetRow > 0) {
-    sheet.getRange(targetRow, 1, 1, 9).setValues(rowValues);
-    return { status: 'success', action: 'updated', row: targetRow, message: '保護者マスターを更新しました' };
+    let existingCode = '';
+    if (sheet.getLastColumn() >= 10) {
+      existingCode = String(sheet.getRange(targetRow, 10).getValue() || '').trim();
+    }
+    const finalCode = authCode || existingCode;
+
+    sheet.getRange(targetRow, 1, 1, 10).setValues([[
+      email, s1, s2, s3, s4, busStop, memo, toSchool, fromSchool, finalCode
+    ]]);
+    SpreadsheetApp.flush();
+    return { status: 'success', success: true, action: 'updated', row: targetRow, message: '保護者マスターを更新しました' };
   } else {
-    sheet.appendRow(rowValues[0]);
-    return { status: 'success', action: 'inserted', row: sheet.getLastRow(), message: '保護者マスターに新規登録しました' };
+    sheet.appendRow([email, s1, s2, s3, s4, busStop, memo, toSchool, fromSchool, authCode]);
+    SpreadsheetApp.flush();
+    return { status: 'success', success: true, action: 'inserted', row: sheet.getLastRow(), message: '保護者マスターに新規登録しました' };
   }
 }
+
+/**
+ * 6-2. 新入生・新規生徒の事前登録＆認証コード発行（管理者限定 action: "registerNewStudentWithCode"）
+ */
+function registerNewStudentWithCodeToSheet(params) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName('生徒・保護者マスター');
+  if (!sheet) {
+    sheet = ss.insertSheet('生徒・保護者マスター');
+    sheet.appendRow([
+      '保護者メールアドレス', '生徒名１', '生徒名２', '生徒名３', '生徒名４',
+      '登録バス停名', '備考', '基本_登校', '基本_下校', '認証コード'
+    ]);
+  }
+
+  const s1 = String(params.student_name || params.student_name_1 || params['生徒名１'] || '').trim();
+  if (!s1) {
+    return { status: 'error', success: false, message: '生徒名（第1子）が必要です' };
+  }
+  const s2 = String(params.student_name_2 || params['生徒名２'] || '').trim();
+  const s3 = String(params.student_name_3 || params['生徒名３'] || '').trim();
+  const s4 = String(params.student_name_4 || params['生徒名４'] || '').trim();
+  const busStop = String(params.bus_stop_name || params.busStop || '高山研修所前').trim();
+  const note = String(params.note || params.memo || '').trim();
+  const defMorning = String(params.default_morning || params.defaultToSchool || '乗る').trim();
+  const defAfternoon = String(params.default_afternoon || params.defaultFromSchool || '1便').trim();
+
+  // ランダムな認証コード生成（例: SB-XXXX）
+  const randNum = Math.floor(1000 + Math.random() * 9000);
+  const authCode = `SB-${randNum}`;
+
+  sheet.appendRow(['', s1, s2, s3, s4, busStop, note, defMorning, defAfternoon, authCode]);
+  SpreadsheetApp.flush();
+
+  return {
+    status: 'success',
+    success: true,
+    code: authCode,
+    auth_code: authCode,
+    student_name: s1,
+    message: `新入生「${s1}」を事前登録し、認証コード【${authCode}】を発行しました`
+  };
+}
+
+/**
+ * 6-3. 保護者アカウントと生徒の認証コード連携・兄弟追加統合（action: "linkStudentWithCode"）
+ * 
+ * 1. 認証コード（code）に一致する行（ソース行）を「生徒・保護者マスター」から検索
+ * 2. ソース行から生徒名（B列、または未連携の全生徒名）を取得
+ * 3. 保護者メール（email）に一致するターゲット世帯行を検索
+ * 4. ターゲット行の空いている列（C列、D列、E列）の順に生徒名を追加
+ * 5. ソース行がターゲット行と異なる独立行の場合、ソース行を自動削除（マージ統合）
+ * 6. 更新後の生徒名配列 student_names、追加された生徒名 student_name を返却
+ */
+function linkStudentWithCodeToSheet(params) {
+  const email = String(params.email || params.parent_email || params.parentEmail || '').trim().toLowerCase();
+  const rawCode = String(params.code || params.auth_code || params.authCode || '').trim();
+
+  if (!rawCode) {
+    return { status: 'error', success: false, message: '認証コードが指定されていません' };
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('生徒・保護者マスター');
+  if (!sheet) {
+    return { status: 'error', success: false, message: '「生徒・保護者マスター」シートが見つかりません' };
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return { status: 'error', success: false, message: 'マスターにデータがありません' };
+  }
+
+  const numCols = Math.max(sheet.getLastColumn(), 10);
+  const data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+  const normalizeCode = function(c) { return String(c || '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase(); };
+  const targetCodeNorm = normalizeCode(rawCode);
+
+  let sourceRowIdx = -1;
+  let sourceStudentNames = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const rowCode = String(data[i][9] || '').trim();
+    if (rowCode && (rowCode.toUpperCase() === rawCode.toUpperCase() || normalizeCode(rowCode) === targetCodeNorm)) {
+      sourceRowIdx = i + 2;
+      const s1 = String(data[i][1] || '').trim();
+      const s2 = String(data[i][2] || '').trim();
+      const s3 = String(data[i][3] || '').trim();
+      const s4 = String(data[i][4] || '').trim();
+      sourceStudentNames = [s1, s2, s3, s4].filter(Boolean);
+      break;
+    }
+  }
+
+  if (sourceRowIdx < 0 || sourceStudentNames.length === 0) {
+    return { status: 'error', success: false, message: '指定された認証コードのお子様が見つかりませんでした' };
+  }
+
+  const studentNameToAdd = sourceStudentNames[0];
+
+  // メールアドレスが指定されている場合、既存の保護者世帯行を検索
+  let targetRowIdx = -1;
+  if (email) {
+    for (let i = 0; i < data.length; i++) {
+      const rowEmail = String(data[i][0] || '').trim().toLowerCase();
+      if (rowEmail === email) {
+        targetRowIdx = i + 2;
+        break;
+      }
+    }
+  }
+
+  // もしターゲット行が見つからない場合、またはソース行自身の場合（初回ログイン連携）
+  if (targetRowIdx < 0 || targetRowIdx === sourceRowIdx) {
+    if (email) {
+      sheet.getRange(sourceRowIdx, 1).setValue(email);
+    }
+    SpreadsheetApp.flush();
+    return {
+      status: 'success',
+      success: true,
+      action: 'linked_primary',
+      student_name: studentNameToAdd,
+      student_names: sourceStudentNames,
+      message: 'お子様「' + studentNameToAdd + '」を保護者アカウントに連携しました'
+    };
+  }
+
+  // ターゲット世帯行が存在する場合（兄弟追加統合）
+  const targetDataRow = sheet.getRange(targetRowIdx, 1, 1, 9).getValues()[0];
+  let curS1 = String(targetDataRow[1] || '').trim();
+  let curS2 = String(targetDataRow[2] || '').trim();
+  let curS3 = String(targetDataRow[3] || '').trim();
+  let curS4 = String(targetDataRow[4] || '').trim();
+
+  const currentNames = [curS1, curS2, curS3, curS4].filter(Boolean);
+
+  // 既に登録済みかチェック
+  if (currentNames.includes(studentNameToAdd)) {
+    return {
+      status: 'success',
+      success: true,
+      action: 'already_exists',
+      student_name: studentNameToAdd,
+      student_names: currentNames,
+      message: 'お子様「' + studentNameToAdd + '」は既に登録されています'
+    };
+  }
+
+  // 空いている列（C列=列3, D列=列4, E列=列5）の順に配置
+  if (!curS2) {
+    curS2 = studentNameToAdd;
+  } else if (!curS3) {
+    curS3 = studentNameToAdd;
+  } else if (!curS4) {
+    curS4 = studentNameToAdd;
+  } else {
+    return { status: 'error', success: false, message: '兄弟は最大4名までしか登録できません' };
+  }
+
+  // ターゲット行の生徒列（B〜E列）を更新
+  sheet.getRange(targetRowIdx, 2, 1, 4).setValues([[curS1, curS2, curS3, curS4]]);
+
+  // ソース行を削除（統合元の独立行が存在する場合）
+  if (sourceRowIdx > 0 && sourceRowIdx !== targetRowIdx) {
+    sheet.deleteRow(sourceRowIdx);
+  }
+
+  SpreadsheetApp.flush();
+
+  const updatedNames = [curS1, curS2, curS3, curS4].filter(Boolean);
+  return {
+    status: 'success',
+    success: true,
+    action: 'merged_sibling',
+    student_name: studentNameToAdd,
+    student_names: updatedNames,
+    message: 'ご兄弟「' + studentNameToAdd + '」を同一世帯に統合しました'
+  };
+}
+
+/**
+ * 6-4. 生徒・保護者マスターの行削除（action: "deleteGuardianMaster"）
+ */
+function deleteGuardianMasterFromSheet(params) {
+  const email = String(params.parent_email || params.email || params.parentEmail || '').trim().toLowerCase();
+  const code = String(params.auth_code || params.code || '').trim();
+  const studentName = String(params.student_name || '').trim();
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('生徒・保護者マスター');
+  if (!sheet) return { status: 'error', success: false, message: '「生徒・保護者マスター」シートが存在しません' };
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { status: 'error', success: false, message: '削除対象のデータがありません' };
+
+  const numCols = Math.max(sheet.getLastColumn(), 10);
+  const data = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    const rowEmail = String(data[i][0] || '').trim().toLowerCase();
+    const rowCode = String(data[i][9] || '').trim();
+    const s1 = String(data[i][1] || '').trim();
+    const s2 = String(data[i][2] || '').trim();
+    const s3 = String(data[i][3] || '').trim();
+    const s4 = String(data[i][4] || '').trim();
+    const names = [s1, s2, s3, s4].filter(Boolean);
+
+    let match = false;
+    if (email && rowEmail === email) match = true;
+    else if (code && rowCode.toUpperCase() === code.toUpperCase()) match = true;
+    else if (studentName && names.includes(studentName)) match = true;
+
+    if (match) {
+      sheet.deleteRow(i + 2);
+      SpreadsheetApp.flush();
+      return {
+        status: 'success',
+        success: true,
+        message: '世帯データを削除しました'
+      };
+    }
+  }
+
+  return { status: 'error', success: false, message: '削除対象の世帯データが見つかりませんでした' };
+}
+
 
 /**
  * 7. バス停一覧取得（「バス停マスタ」）

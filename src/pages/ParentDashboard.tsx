@@ -53,23 +53,27 @@ export const ParentDashboard: React.FC = () => {
     return guardianMaster.slice(0, 1)
   }, [user, guardianMaster])
 
-  // 生徒一覧（同一世帯のB列:第1子、C列:第2子を正確に抽出・維持）
+  // 生徒一覧（同一世帯のB〜E列: 最大4名の兄弟を正確に抽出・維持）
   const studentNames = useMemo(() => {
     const list: string[] = []
 
-    // 0. user.studentNames がセッションにある場合（B列、C列順）
+    // 0. user.studentNames がセッションにある場合（B〜E列順）
     if (user?.studentNames && user.studentNames.length > 0) {
       user.studentNames.forEach(s => {
         if (s && !list.includes(s)) list.push(s)
       })
     }
 
-    // 1. myGuardians の世帯行から B列(student_name_1), C列(student_name_2) を抽出
+    // 1. myGuardians の世帯行から B〜E列(student_name_1〜4) を抽出
     myGuardians.forEach(g => {
       const s1 = g.student_name_1 || g.student_names[0]
       const s2 = g.student_name_2 || g.student_names[1]
+      const s3 = g.student_name_3 || g.student_names[2]
+      const s4 = g.student_name_4 || g.student_names[3]
       if (s1 && !list.includes(s1)) list.push(s1)
       if (s2 && !list.includes(s2)) list.push(s2)
+      if (s3 && !list.includes(s3)) list.push(s3)
+      if (s4 && !list.includes(s4)) list.push(s4)
       g.student_names.forEach(s => {
         if (s && !list.includes(s)) list.push(s)
       })
@@ -739,7 +743,7 @@ export const ParentDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* 生徒切り替えタブ（同一世帯の第1子(B列)・第2子(C列)兄弟管理 ＆ コード追加） */}
+      {/* 生徒切り替えタブ（同一世帯のB〜E列・最大4名兄弟管理 ＆ 兄弟追加統合） */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-3 sm:p-4 shadow-lg">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
@@ -748,26 +752,29 @@ export const ParentDashboard: React.FC = () => {
             </div>
             {studentNames.map((name, idx) => {
               const isSelected = selectedStudent === name
-              const icon = idx === 0 ? '👦' : idx === 1 ? '👧' : '🧒'
-              const label = studentNames.length > 1
-                ? `第${idx + 1}子: ${name}`
-                : `${name} さん`
+              const icon = idx === 0 ? '👦' : idx === 1 ? '👧' : idx === 2 ? '🧒' : '👶'
+              const codeLabel = `A-${idx + 1}`
 
               return (
                 <button
                   key={name}
                   type="button"
                   onClick={() => setSelectedStudent(name)}
-                  className={`px-4 sm:px-5 py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md whitespace-nowrap cursor-pointer ${
+                  className={`px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-1.5 transition-all shadow-md whitespace-nowrap cursor-pointer ${
                     isSelected
                       ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/25 ring-2 ring-amber-300 scale-100'
                       : 'bg-slate-950 hover:bg-slate-850 text-slate-300 border border-slate-800 hover:border-slate-700'
                   }`}
                 >
                   <span className="text-base leading-none">{icon}</span>
-                  <span>{label}</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-black ${
+                    isSelected ? 'bg-slate-950/25 text-slate-950' : 'bg-slate-800 text-amber-300'
+                  }`}>
+                    {codeLabel}
+                  </span>
+                  {!name.includes('A-') && <span>{name}</span>}
                   {isSelected && (
-                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-950/30 text-slate-950 rounded-full font-bold">
+                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-950/30 text-slate-950 rounded-full font-bold ml-1">
                       選択中
                     </span>
                   )}
@@ -776,7 +783,7 @@ export const ParentDashboard: React.FC = () => {
             })}
           </div>
 
-          {/* ＋ お子様を追加（兄弟姉妹）ボタン */}
+          {/* ＋ 兄弟・姉妹を追加する ボタン */}
           <button
             type="button"
             onClick={() => {
@@ -785,10 +792,10 @@ export const ParentDashboard: React.FC = () => {
               setSiblingCode('')
               setIsAddSiblingModalOpen(true)
             }}
-            className="px-3.5 py-2 bg-slate-950 hover:bg-slate-850 border border-dashed border-amber-500/50 hover:border-amber-400 text-amber-300 hover:text-amber-200 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap shadow-sm shrink-0 self-start sm:self-auto cursor-pointer"
+            className="px-3.5 py-2 bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 border border-amber-500/40 hover:border-amber-400 text-amber-300 hover:text-amber-200 rounded-2xl text-xs font-black flex items-center justify-center gap-1.5 transition-all whitespace-nowrap shadow-sm shrink-0 self-start sm:self-auto cursor-pointer"
           >
-            <Plus className="h-3.5 w-3.5 text-amber-400" />
-            <span>お子様を追加（コード入力）</span>
+            <Plus className="h-4 w-4 text-amber-400" />
+            <span>＋ 兄弟・姉妹を追加する</span>
           </button>
         </div>
       </div>
@@ -1543,7 +1550,7 @@ export const ParentDashboard: React.FC = () => {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-base font-black text-white flex items-center gap-2">
                 <UserPlus className="h-5 w-5 text-amber-400" />
-                お子様（ご兄弟）の追加登録
+                兄弟・姉妹の追加統合（認証コード入力）
               </h3>
               <button
                 type="button"
