@@ -97,4 +97,6 @@ export interface AuthUser {
   name: string
   role: UserRole
   studentName?: string
+  studentNames?: string[] // 世帯内の全生徒（第1子, 第2子）
+  authCode?: string // J列: 世帯認証コード
 }

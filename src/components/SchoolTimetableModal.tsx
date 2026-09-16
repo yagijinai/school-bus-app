@@ -344,23 +344,23 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         </div>
 
         {/* ========================================================= */}
-        {/* 凡例バー */}
+        {/* 色凡例（レジェンド）：スマホ・PC両対応 */}
         {/* ========================================================= */}
-        <div className="hidden sm:flex flex-wrap items-center gap-3 text-[11px] text-slate-400 px-6 py-2 bg-slate-950/40 border-b border-slate-800/60 shrink-0">
+        <div className="flex flex-wrap items-center justify-between sm:justify-start gap-x-3 gap-y-1 text-[11px] text-slate-300 px-4 sm:px-6 py-2 bg-slate-950/60 border-b border-slate-800/80 shrink-0">
           <span className="flex items-center gap-1.5 font-bold text-amber-300">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" /> 🌅 登校便
+            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block shadow-sm" /> 登校
           </span>
           <span className="flex items-center gap-1.5 font-bold text-sky-300">
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block" /> 🚌 下校1便
+            <span className="w-2 h-2 rounded-full bg-sky-400 inline-block shadow-sm" /> 下校1便
           </span>
           <span className="flex items-center gap-1.5 font-bold text-indigo-300">
-            <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 inline-block" /> 🚍 下校2便
+            <span className="w-2 h-2 rounded-full bg-indigo-400 inline-block shadow-sm" /> 下校2便
           </span>
           <span className="flex items-center gap-1.5 font-bold text-purple-300">
-            <span className="w-2.5 h-2.5 rounded-full bg-purple-400 inline-block" /> 🌙 下校3便
+            <span className="w-2 h-2 rounded-full bg-purple-400 inline-block shadow-sm" /> 下校3便
           </span>
           <span className="flex items-center gap-1.5 font-bold text-rose-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" /> 🎌 祝日/運休
+            <span className="w-2 h-2 rounded-full bg-rose-500 inline-block shadow-sm" /> 祝日/運休
           </span>
         </div>
 
@@ -457,68 +457,60 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
                       </div>
                     )}
 
-                    {/* 下段：各便の運行時刻（折り返しなし・大きなフォントでハッキリ表示） */}
+                    {/* 下段：各便の運行時刻バッジ（色別バッジ・時刻のみ表示） */}
                     {isSusp ? (
                       <div className="py-2 text-center text-xs font-bold text-rose-400 bg-rose-950/30 rounded-xl border border-rose-900/30">
                         {item.suspension.name ? `全便運休（${item.suspension.name}）` : '全便運休期間'}
                       </div>
                     ) : item.hasTrips ? (
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        {/* 登校便 */}
-                        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
-                          <span className="text-slate-400 font-bold flex items-center gap-1">
-                            🌅 登校:
-                          </span>
-                          {morning ? (
-                            <span className="text-sm font-black text-amber-300 font-mono tracking-wide">
-                              {morning}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* 登校便バッジ */}
+                        {morning && (
+                          <div
+                            className="flex-1 min-w-[70px] py-2 px-2.5 rounded-xl bg-amber-500/20 border border-amber-500/35 text-amber-300 text-center shadow-sm"
+                            title={`登校: ${morning}`}
+                          >
+                            <span className="text-sm sm:text-base font-black font-mono tracking-wide">
+                              {morning.replace(/^0/, '')}
                             </span>
-                          ) : (
-                            <span className="text-slate-600 text-[11px]">なし</span>
-                          )}
-                        </div>
+                          </div>
+                        )}
 
-                        {/* 下校1便 */}
-                        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
-                          <span className="text-slate-400 font-bold flex items-center gap-1">
-                            🚌 下校1:
-                          </span>
-                          {t1 ? (
-                            <span className="text-sm font-black text-sky-300 font-mono tracking-wide">
+                        {/* 下校1便バッジ */}
+                        {t1 && (
+                          <div
+                            className="flex-1 min-w-[70px] py-2 px-2.5 rounded-xl bg-sky-500/20 border border-sky-500/35 text-sky-300 text-center shadow-sm"
+                            title={`下校1便: ${t1}`}
+                          >
+                            <span className="text-sm sm:text-base font-black font-mono tracking-wide">
                               {t1}
                             </span>
-                          ) : (
-                            <span className="text-slate-600 text-[11px]">なし</span>
-                          )}
-                        </div>
+                          </div>
+                        )}
 
-                        {/* 下校2便 */}
-                        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
-                          <span className="text-slate-400 font-bold flex items-center gap-1">
-                            🚍 下校2:
-                          </span>
-                          {t2 ? (
-                            <span className="text-sm font-black text-indigo-300 font-mono tracking-wide">
+                        {/* 下校2便バッジ */}
+                        {t2 && (
+                          <div
+                            className="flex-1 min-w-[70px] py-2 px-2.5 rounded-xl bg-indigo-500/20 border border-indigo-500/35 text-indigo-300 text-center shadow-sm"
+                            title={`下校2便: ${t2}`}
+                          >
+                            <span className="text-sm sm:text-base font-black font-mono tracking-wide">
                               {t2}
                             </span>
-                          ) : (
-                            <span className="text-slate-600 text-[11px]">なし</span>
-                          )}
-                        </div>
+                          </div>
+                        )}
 
-                        {/* 下校3便 */}
-                        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-center justify-between">
-                          <span className="text-slate-400 font-bold flex items-center gap-1">
-                            🌙 下校3:
-                          </span>
-                          {t3 ? (
-                            <span className="text-sm font-black text-purple-300 font-mono tracking-wide">
+                        {/* 下校3便バッジ */}
+                        {t3 && (
+                          <div
+                            className="flex-1 min-w-[70px] py-2 px-2.5 rounded-xl bg-purple-500/20 border border-purple-500/35 text-purple-300 text-center shadow-sm"
+                            title={`下校3便: ${t3}`}
+                          >
+                            <span className="text-sm sm:text-base font-black font-mono tracking-wide">
                               {t3}
                             </span>
-                          ) : (
-                            <span className="text-slate-600 text-[11px]">なし</span>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="py-2 text-center text-xs text-slate-500 font-bold bg-slate-950/40 rounded-xl border border-slate-800/60">
@@ -601,30 +593,42 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
                       </div>
                     )}
 
-                    {/* 便情報 */}
-                    <div className="space-y-0.5 text-[10px] font-mono">
+                    {/* 便情報バッジ（色分け＋時刻のみ表示） */}
+                    <div className="space-y-1 text-[10px] md:text-[11px] font-mono">
                       {morning && (
-                        <div className="text-amber-300 truncate font-bold">
-                          登校 {morning}
+                        <div
+                          className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/35 text-amber-300 font-bold text-center truncate tracking-tight shadow-sm"
+                          title={`登校: ${morning}`}
+                        >
+                          {morning.replace(/^0/, '')}
                         </div>
                       )}
                       {t1 && (
-                        <div className="text-sky-300 truncate font-bold">
-                          下校1 {t1}
+                        <div
+                          className="px-1.5 py-0.5 rounded-md bg-sky-500/20 border border-sky-500/35 text-sky-300 font-bold text-center truncate tracking-tight shadow-sm"
+                          title={`下校1便: ${t1}`}
+                        >
+                          {t1}
                         </div>
                       )}
                       {t2 && (
-                        <div className="text-indigo-300 truncate font-bold">
-                          下校2 {t2}
+                        <div
+                          className="px-1.5 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-500/35 text-indigo-300 font-bold text-center truncate tracking-tight shadow-sm"
+                          title={`下校2便: ${t2}`}
+                        >
+                          {t2}
                         </div>
                       )}
                       {t3 && (
-                        <div className="text-purple-300 truncate font-bold">
-                          下校3 {t3}
+                        <div
+                          className="px-1.5 py-0.5 rounded-md bg-purple-500/20 border border-purple-500/35 text-purple-300 font-bold text-center truncate tracking-tight shadow-sm"
+                          title={`下校3便: ${t3}`}
+                        >
+                          {t3}
                         </div>
                       )}
                       {!morning && !t1 && !t2 && !t3 && day.isCurrentMonth && (
-                        <div className="text-slate-600 text-[9px]">運行なし</div>
+                        <div className="text-slate-600 text-[10px] text-center py-0.5">運行なし</div>
                       )}
                     </div>
                   </div>

@@ -113,6 +113,21 @@ export function formatTimeToHHmm(val: any): string {
 }
 
 /**
+ * 乗車確認文字列から時刻（HH:mm）のみを抽出（バス停名 "(〇〇)" 等の付加文字列を除去）
+ * 例: "07:40 (高山研修所前)" -> "07:40", "16:05" -> "16:05"
+ */
+export function extractBoardingTime(val: any): string {
+  if (!val) return ''
+  const str = String(val).trim()
+  const match = str.match(/(\d{1,2}:\d{2})/)
+  if (match) {
+    const [h, m] = match[1].split(':')
+    return `${h.padStart(2, '0')}:${m}`
+  }
+  return formatTimeOnly(str)
+}
+
+/**
  * GAS GETリクエスト送信
  */
 async function sendGASGet<T>(params: Record<string, string>): Promise<{ success: boolean; data?: T; message?: string }> {
@@ -223,23 +238,29 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
     order: Number(row.order || row.order_index || row['停車順序'] || 0)
   })).filter(b => b.name)
 
-  // ③ 運行予定カレンダー (A: ID, B: 日付, C: 生徒名, D: 登校ステータス, E: 下校ステータス, F〜H: 下校1〜3便, I: 備考, J: 更新日時, K: メール)
-  const rawSchedules = raw.schedules || raw['運行予定カレンダー'] || []
-  const schedules: ScheduleCalendarRow[] = (Array.isArray(rawSchedules) ? rawSchedules : []).map((row: any) => ({
-    id: row.id ?? row['ID'] ?? '',
-    date: toSlashDate(row.date || row['日付'] || ''),
-    student_name: String(row.student_name || row['生徒名'] || '').trim(),
-    morning_status: String(row.morning_status || row['登校ステータス'] || '').trim(),
-    afternoon_status: String(row.afternoon_status || row['下校ステータス'] || '').trim(),
-    afternoon_trip_1: String(row.afternoon_trip_1 || row['下校1便'] || '').trim(),
-    afternoon_trip_2: String(row.afternoon_trip_2 || row['下校2便'] || '').trim(),
-    afternoon_trip_3: String(row.afternoon_trip_3 || row['下校3便'] || '').trim(),
-    note: String(row.note || row['備考'] || '').trim(),
-    updated_at: String(row.updated_at || row['更新日時'] || '').trim(),
-    parent_email: String(row.parent_email || row['保護者メールアドレス'] || '').trim().toLowerCase(),
-    morning_boarding: String(row.morning_boarding || row['登校乗車確認'] || '').trim(),
-    afternoon_boarding: String(row.afternoon_boarding || row['下校乗車確認'] || '').trim()
-  })).filter(s => s.date && s.student_name)
+  // ③ 運行予定カレンダー (A: ID, B: 日付, C: 生徒名, D: 登校ステータス, E: 下校ステータス, F〜H: 下校1〜3便, I: 備考, J: 更新日時, K: メール, L: 乗車時刻, M: 降車時刻)
+  const rawSchedules = raw.schedules || raw['運行予定カレンダー'] || raw['バス予約データ'] || raw['運行記録'] || []
+  const schedules: ScheduleCalendarRow[] = (Array.isArray(rawSchedules) ? rawSchedules : []).map((row: any) => {
+    const morningBoarding = String(row.morning_boarding || row['登校乗車確認'] || row.boarded_at || row['乗車時刻'] || '').trim()
+    const afternoonBoarding = String(row.afternoon_boarding || row['下校乗車確認'] || row.alighted_at || row['降車時刻'] || '').trim()
+    return {
+      id: row.id ?? row['ID'] ?? '',
+      date: toSlashDate(row.date || row['日付'] || ''),
+      student_name: String(row.student_name || row['生徒名'] || '').trim(),
+      morning_status: String(row.morning_status || row['登校ステータス'] || '').trim(),
+      afternoon_status: String(row.afternoon_status || row['下校ステータス'] || '').trim(),
+      afternoon_trip_1: String(row.afternoon_trip_1 || row['下校1便'] || '').trim(),
+      afternoon_trip_2: String(row.afternoon_trip_2 || row['下校2便'] || '').trim(),
+      afternoon_trip_3: String(row.afternoon_trip_3 || row['下校3便'] || '').trim(),
+      note: String(row.note || row['備考'] || '').trim(),
+      updated_at: String(row.updated_at || row['更新日時'] || '').trim(),
+      parent_email: String(row.parent_email || row['保護者メールアドレス'] || '').trim().toLowerCase(),
+      morning_boarding: morningBoarding,
+      afternoon_boarding: afternoonBoarding,
+      boarded_at: morningBoarding,
+      alighted_at: afternoonBoarding
+    }
+  }).filter(s => s.date && s.student_name)
 
   // ④ 基本設定・運休期間 (A: 設定名, B: 開始日, C: 終了日, D: 標準運行, E: 内容・時刻, F: 備考)
   const rawSettings = raw.basicSettings || raw['基本設定・運休期間'] || []
@@ -409,7 +430,7 @@ export async function saveBatchSchedulesToSheet(schedules: Array<{
 }
 
 /**
- * 2-C. 運転手による乗車確認の記録（点呼タップ連動: action: "recordBoarding"）
+ * 2-C. 運転手による乗車・降車確認の記録（点呼タップ連動: action: "updateRollCall" / "recordBoarding"）
  */
 export async function recordBoardingToSheet(payload: {
   date: string // YYYY/MM/DD
@@ -417,20 +438,40 @@ export async function recordBoardingToSheet(payload: {
   tripType: '登校' | '下校'
   boarded: boolean
   busStop?: string
-}): Promise<{ success: boolean; boardingValue?: string; message?: string }> {
+  timeStr?: string
+  rollCallType?: 'boarded' | 'alighted'
+}): Promise<{ success: boolean; boardingValue?: string; rollCallType?: string; message?: string; [key: string]: any }> {
   const slashDate = toSlashDate(payload.date)
-  return sendGASPost({
+  const isMorning = payload.tripType === '登校'
+  const time = payload.timeStr || ''
+  const rollCallType = payload.rollCallType || (isMorning ? 'boarded' : 'alighted')
+  const isBoardedTarget = rollCallType === 'boarded'
+
+  const res = await sendGASPost<any>({
     action: 'recordBoarding',
+    subAction: 'updateRollCall',
     date: slashDate,
     rawDate: slashDate,
     studentName: payload.studentName,
     student_name: payload.studentName,
     tripType: payload.tripType,
     trip_type: payload.tripType,
+    rollCallType,
+    roll_call_type: rollCallType,
     boarded: payload.boarded,
     busStop: payload.busStop || '',
-    bus_stop: payload.busStop || ''
+    bus_stop: payload.busStop || '',
+    timeStr: time,
+    boardingTime: time,
+    boarded_at: isBoardedTarget && payload.boarded ? time : '',
+    alighted_at: !isBoardedTarget && payload.boarded ? time : '',
+    status: payload.boarded ? (isBoardedTarget ? '乗車済' : '降車済') : ''
   })
+  return {
+    ...res,
+    boardingValue: res.boardingValue || res.boardingTime || time,
+    rollCallType
+  }
 }
 
 /**
@@ -557,6 +598,7 @@ export function isMonthPublished(
  */
 export async function saveGuardianMasterToSheet(payload: {
   parent_email: string
+  auth_code?: string
   student_name_1?: string
   student_name_2?: string
   student_name_3?: string
@@ -568,15 +610,24 @@ export async function saveGuardianMasterToSheet(payload: {
 }): Promise<{ success: boolean; message?: string }> {
   return sendGASPost({
     action: 'saveGuardianMaster',
-    parentEmail: payload.parent_email.trim().toLowerCase(),
+    parentEmail: (payload.parent_email || '').trim().toLowerCase(),
+    email: (payload.parent_email || '').trim().toLowerCase(),
+    auth_code: (payload.auth_code || '').trim(),
+    code: (payload.auth_code || '').trim(),
     student1: payload.student_name_1 || '',
     student2: payload.student_name_2 || '',
+    student_name_1: payload.student_name_1 || '',
+    student_name_2: payload.student_name_2 || '',
     student3: payload.student_name_3 || '',
     student4: payload.student_name_4 || '',
     busStop: payload.bus_stop_name || '',
+    bus_stop_name: payload.bus_stop_name || '',
     memo: payload.note || '',
+    note: payload.note || '',
     defaultToSchool: payload.default_morning || '乗る',
-    defaultFromSchool: payload.default_afternoon || '1便'
+    default_morning: payload.default_morning || '乗る',
+    defaultFromSchool: payload.default_afternoon || '1便',
+    default_afternoon: payload.default_afternoon || '1便'
   })
 }
 
@@ -667,12 +718,15 @@ export async function deleteBusStopFromSheet(stopName: string): Promise<{ succes
  */
 export async function registerNewStudentWithCodeToSheet(payload: {
   student_name: string
+  student_name_2?: string
   bus_stop_name?: string
   note?: string
 }): Promise<{ success: boolean; status?: string; message?: string; code?: string; auth_code?: string; student_name?: string; [key: string]: any }> {
   return sendGASPost({
     action: 'registerNewStudentWithCode',
     student_name: payload.student_name.trim(),
+    student_name_1: payload.student_name.trim(),
+    student_name_2: (payload.student_name_2 || '').trim(),
     bus_stop_name: payload.bus_stop_name || '',
     note: payload.note || ''
   })

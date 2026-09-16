@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { 
   Bus, 
-  ChevronLeft, ChevronRight, ChevronDown, User, RefreshCw, LogOut, CheckCircle2, Ban,
+  ChevronLeft, ChevronRight, ChevronDown, RefreshCw, LogOut, CheckCircle2, Ban,
   Plus, UserPlus, AlertCircle, X, Calendar, CalendarDays, Sparkles, Check,
   Lock, Circle
 } from 'lucide-react'
@@ -20,41 +20,67 @@ export const ParentDashboard: React.FC = () => {
     saveReservation, saveBatchSchedules, linkStudentWithCode, syncing, refreshAll 
   } = useApp()
 
-  // ログイン保護者のマスターデータ（生徒名またはメールによる高精度突合）
+  // ログイン保護者のマスターデータ（認証コード・生徒名・メールによる高精度突合）
   const myGuardians = useMemo(() => {
     if (!user) return []
-    // 1. user.studentName が指定されている場合、その生徒名を含む行を最優先
+    // 0. user.authCode が指定されている場合、その認証コードを持つ世帯行を最優先
+    if (user.authCode) {
+      const match = guardianMaster.filter(g => g.auth_code && g.auth_code.trim().toUpperCase() === user.authCode!.trim().toUpperCase())
+      if (match.length > 0) return match
+    }
+    // 1. user.studentName が指定されている場合、その生徒名を含む行を優先
     if (user.studentName) {
       const match = guardianMaster.filter(g => g.student_names.includes(user.studentName!))
       if (match.length > 0) return match
     }
-    // 2. user.email が parent_${studentName} の形式の場合
+    // 2. user.studentNames がある場合、そのいずれかを含む行
+    if (user.studentNames && user.studentNames.length > 0) {
+      const match = guardianMaster.filter(g => g.student_names.some(s => user.studentNames!.includes(s)))
+      if (match.length > 0) return match
+    }
+    // 3. user.email が parent_${studentName} の形式の場合
     if (user.email && user.email.startsWith('parent_')) {
       const sName = user.email.replace(/^parent_/, '')
       const match = guardianMaster.filter(g => g.student_names.includes(sName))
       if (match.length > 0) return match
     }
-    // 3. 通常のメールアドレス完全一致（空文字でない場合）
+    // 4. 通常のメールアドレス完全一致（空文字でない場合）
     if (user.email && !user.email.startsWith('parent_')) {
       const match = guardianMaster.filter(g => g.parent_email && g.parent_email.toLowerCase() === user.email.toLowerCase())
       if (match.length > 0) return match
     }
-    // 4. フォールバック
+    // 5. フォールバック
     return guardianMaster.slice(0, 1)
   }, [user, guardianMaster])
 
-  // 生徒一覧（B〜E列および同メール・指定生徒からユニーク抽出）
+  // 生徒一覧（同一世帯のB列:第1子、C列:第2子を正確に抽出・維持）
   const studentNames = useMemo(() => {
-    const set = new Set<string>()
-    if (user?.studentName) {
-      set.add(user.studentName)
+    const list: string[] = []
+
+    // 0. user.studentNames がセッションにある場合（B列、C列順）
+    if (user?.studentNames && user.studentNames.length > 0) {
+      user.studentNames.forEach(s => {
+        if (s && !list.includes(s)) list.push(s)
+      })
     }
+
+    // 1. myGuardians の世帯行から B列(student_name_1), C列(student_name_2) を抽出
     myGuardians.forEach(g => {
+      const s1 = g.student_name_1 || g.student_names[0]
+      const s2 = g.student_name_2 || g.student_names[1]
+      if (s1 && !list.includes(s1)) list.push(s1)
+      if (s2 && !list.includes(s2)) list.push(s2)
       g.student_names.forEach(s => {
-        if (s) set.add(s)
+        if (s && !list.includes(s)) list.push(s)
       })
     })
-    return Array.from(set)
+
+    // 2. user.studentName が指定されているがまだ入っていない場合
+    if (user?.studentName && !list.includes(user.studentName)) {
+      list.unshift(user.studentName)
+    }
+
+    return list
   }, [myGuardians, user])
 
   // 選択中の生徒
@@ -72,9 +98,13 @@ export const ParentDashboard: React.FC = () => {
 
   // 初期選択の更新
   useEffect(() => {
+    if (selectedStudent && studentNames.includes(selectedStudent)) {
+      // 既に選択されており、リストに含まれていれば維持
+      return
+    }
     if (user?.studentName && studentNames.includes(user.studentName)) {
       setSelectedStudent(user.studentName)
-    } else if (studentNames.length > 0 && (!selectedStudent || !studentNames.includes(selectedStudent))) {
+    } else if (studentNames.length > 0) {
       setSelectedStudent(studentNames[0])
     }
   }, [studentNames, selectedStudent, user?.studentName])
@@ -709,38 +739,58 @@ export const ParentDashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* 生徒切り替えタブ（B〜E列） ＆ 兄弟追加ボタン */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-        {studentNames.map(name => (
-          <button
-            key={name}
-            type="button"
-            onClick={() => setSelectedStudent(name)}
-            className={`px-5 py-2.5 rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md whitespace-nowrap ${
-              selectedStudent === name
-                ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/20 scale-100'
-                : 'bg-slate-900 hover:bg-slate-850 text-slate-400 border border-slate-800'
-            }`}
-          >
-            <User className="h-4 w-4" />
-            {name}
-          </button>
-        ))}
+      {/* 生徒切り替えタブ（同一世帯の第1子(B列)・第2子(C列)兄弟管理 ＆ コード追加） */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-3 sm:p-4 shadow-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0">
+            <div className="text-xs font-black text-slate-400 flex items-center gap-1.5 shrink-0 mr-1">
+              <span>対象のお子様:</span>
+            </div>
+            {studentNames.map((name, idx) => {
+              const isSelected = selectedStudent === name
+              const icon = idx === 0 ? '👦' : idx === 1 ? '👧' : '🧒'
+              const label = studentNames.length > 1
+                ? `第${idx + 1}子: ${name}`
+                : `${name} さん`
 
-        {/* ＋ お子様を追加（兄弟姉妹）ボタン */}
-        <button
-          type="button"
-          onClick={() => {
-            setSiblingError(null)
-            setSiblingSuccess(null)
-            setSiblingCode('')
-            setIsAddSiblingModalOpen(true)
-          }}
-          className="px-4 py-2.5 bg-slate-900 hover:bg-slate-850 border border-dashed border-amber-500/50 hover:border-amber-400 text-amber-300 hover:text-amber-200 rounded-2xl text-xs font-bold flex items-center gap-1.5 transition-all whitespace-nowrap shadow-sm shrink-0"
-        >
-          <Plus className="h-4 w-4 text-amber-400" />
-          お子様を追加（コード入力）
-        </button>
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setSelectedStudent(name)}
+                  className={`px-4 sm:px-5 py-2.5 rounded-2xl font-black text-xs sm:text-sm flex items-center gap-2 transition-all shadow-md whitespace-nowrap cursor-pointer ${
+                    isSelected
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-slate-950 shadow-amber-500/25 ring-2 ring-amber-300 scale-100'
+                      : 'bg-slate-950 hover:bg-slate-850 text-slate-300 border border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <span className="text-base leading-none">{icon}</span>
+                  <span>{label}</span>
+                  {isSelected && (
+                    <span className="text-[10px] px-1.5 py-0.5 bg-slate-950/30 text-slate-950 rounded-full font-bold">
+                      選択中
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* ＋ お子様を追加（兄弟姉妹）ボタン */}
+          <button
+            type="button"
+            onClick={() => {
+              setSiblingError(null)
+              setSiblingSuccess(null)
+              setSiblingCode('')
+              setIsAddSiblingModalOpen(true)
+            }}
+            className="px-3.5 py-2 bg-slate-950 hover:bg-slate-850 border border-dashed border-amber-500/50 hover:border-amber-400 text-amber-300 hover:text-amber-200 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all whitespace-nowrap shadow-sm shrink-0 self-start sm:self-auto cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5 text-amber-400" />
+            <span>お子様を追加（コード入力）</span>
+          </button>
+        </div>
       </div>
 
       {/* 🚌 本日の運行・乗車ステータスカード（車内点呼リアルタイム即時反映） */}

@@ -100,6 +100,7 @@ interface AppContextType {
   switchRole: (targetRole: '管理者' | '運転手' | '保護者', studentName?: string) => Promise<void>
   quickLoginAs: (type: string, studentName?: string) => Promise<void>
   loginAsParentStudent: (studentName: string) => Promise<void>
+  loginWithAuthCode: (emailOrName: string, authCode: string) => Promise<{ success: boolean; message?: string; studentNames?: string[] }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -437,8 +438,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: email,
       name: `${studentName}の保護者`,
       role: '保護者',
-      studentName: studentName
+      studentName: studentName,
+      studentNames: match?.student_names || [studentName],
+      authCode: match?.auth_code
     })
+  }
+
+  // 保護者認証コード照合ログイン（J列照合 ＆ A列自動更新 ＆ セッション確立）
+  const loginWithAuthCode = async (
+    emailOrName: string,
+    rawAuthCode: string
+  ): Promise<{ success: boolean; message?: string; studentNames?: string[] }> => {
+    const cleanEmailOrName = emailOrName.trim()
+    const cleanCode = rawAuthCode.trim().toUpperCase()
+
+    if (!cleanEmailOrName) {
+      return { success: false, message: '保護者メールアドレス（または保護者氏名）を入力してください' }
+    }
+    if (!cleanCode) {
+      return { success: false, message: 'お子様の認証コードを入力してください' }
+    }
+
+    setSyncing(true)
+    let currentMaster = data
+    try {
+      currentMaster = await fetchSpreadsheetMaster()
+      setData(currentMaster)
+    } catch (e) {
+      console.warn('[AppContext] Refresh master in loginWithAuthCode failed, using cache:', e)
+    } finally {
+      setSyncing(false)
+    }
+
+    // 認証コードの一致する世帯レコードを検索（大文字小文字・ハイフンなし等も柔軟に対応）
+    const normalizeCode = (c: string) => c.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+    const targetNorm = normalizeCode(cleanCode)
+
+    const matched = currentMaster.guardianMaster.find(g => {
+      if (!g.auth_code) return false
+      return g.auth_code.trim().toUpperCase() === cleanCode || normalizeCode(g.auth_code) === targetNorm
+    })
+
+    if (!matched) {
+      return {
+        success: false,
+        message: '認証コードが一致しません。学校から発行されたコードをご確認ください。'
+      }
+    }
+
+    // B列・C列から生徒名一覧を抽出
+    const s1 = matched.student_name_1 || matched.student_names[0] || ''
+    const s2 = matched.student_name_2 || matched.student_names[1] || ''
+    const studentNames = [s1, s2].filter(Boolean)
+    if (studentNames.length === 0 && matched.student_names.length > 0) {
+      studentNames.push(...matched.student_names)
+    }
+
+    const primaryStudent = studentNames[0] || '生徒'
+
+    // 初回ログイン時、A列が空欄の場合は入力された保護者メール（または氏名）をスプレッドシートのA列へ自動保存
+    const currentParentEmail = (matched.parent_email || '').trim()
+    if (!currentParentEmail && matched.auth_code) {
+      try {
+        await linkStudentWithCodeToSheet({
+          email: cleanEmailOrName,
+          code: matched.auth_code
+        })
+        setData(prev => ({
+          ...prev,
+          guardianMaster: prev.guardianMaster.map(g => {
+            if (g.auth_code === matched.auth_code) {
+              return { ...g, parent_email: cleanEmailOrName }
+            }
+            return g
+          })
+        }))
+      } catch (err) {
+        console.warn('[AppContext] Failed to auto-save parent email to sheet:', err)
+      }
+    }
+
+    const effectiveEmail = currentParentEmail || cleanEmailOrName
+
+    // セッションを構築し、localStorageに保存
+    const authUser: AuthUser = {
+      email: effectiveEmail,
+      name: cleanEmailOrName.includes('@') ? `${primaryStudent}の保護者` : `${cleanEmailOrName} 様`,
+      role: '保護者',
+      studentName: primaryStudent,
+      studentNames: studentNames,
+      authCode: matched.auth_code
+    }
+
+    setUser(authUser)
+
+    return {
+      success: true,
+      studentNames
+    }
   }
 
   // 検証用：立場（ロール）の即時切り替え
@@ -870,15 +967,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSyncing(true)
     try {
       const res = await saveGuardianMasterToSheet(payload)
-      if (res.success) {
+      if (res.success || (res as any).status === 'success') {
         setData(prev => {
-          const targetEmail = payload.parent_email.trim().toLowerCase()
+          const targetEmail = (payload.parent_email || '').trim().toLowerCase()
+          const targetAuthCode = (payload.auth_code || '').trim().toUpperCase()
           const updated = prev.guardianMaster.map(g => {
-            if (g.parent_email.toLowerCase() === targetEmail) {
+            const isEmailMatch = targetEmail && g.parent_email && g.parent_email.toLowerCase() === targetEmail
+            const isCodeMatch = targetAuthCode && g.auth_code && g.auth_code.trim().toUpperCase() === targetAuthCode
+            if (isEmailMatch || isCodeMatch) {
+              const s1 = payload.student_name_1 !== undefined ? payload.student_name_1 : g.student_name_1
+              const s2 = payload.student_name_2 !== undefined ? payload.student_name_2 : g.student_name_2
+              const studentNames = [s1, s2].filter(Boolean) as string[]
               return {
                 ...g,
-                student_name_1: payload.student_name_1 !== undefined ? payload.student_name_1 : g.student_name_1,
-                student_name_2: payload.student_name_2 !== undefined ? payload.student_name_2 : g.student_name_2,
+                student_name_1: s1,
+                student_name_2: s2,
+                student_names: studentNames.length > 0 ? studentNames : g.student_names,
                 student_name_3: payload.student_name_3 !== undefined ? payload.student_name_3 : g.student_name_3,
                 student_name_4: payload.student_name_4 !== undefined ? payload.student_name_4 : g.student_name_4,
                 bus_stop_name: payload.bus_stop_name || g.bus_stop_name,
@@ -1050,6 +1154,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const res = await registerNewStudentWithCodeToSheet(payload)
       if (res.success || res.status === 'success') {
+        const issuedCode = res.auth_code || res.code
+        if (issuedCode && payload.student_name_2 && payload.student_name_2.trim()) {
+          try {
+            await saveGuardianMasterToSheet({
+              parent_email: '',
+              auth_code: issuedCode,
+              student_name_1: payload.student_name.trim(),
+              student_name_2: payload.student_name_2.trim(),
+              bus_stop_name: payload.bus_stop_name || '',
+              note: payload.note || '',
+              default_morning: '乗る',
+              default_afternoon: '1便'
+            })
+          } catch (err) {
+            console.warn('[AppContext] Failed to update sibling in registerNewStudentWithCode:', err)
+          }
+        }
         await refreshAll()
       }
       return res
@@ -1149,7 +1270,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteGuardianMaster: handleDeleteGuardianMaster,
         switchRole,
         quickLoginAs,
-        loginAsParentStudent
+        loginAsParentStudent,
+        loginWithAuthCode
       }}
     >
       {children}

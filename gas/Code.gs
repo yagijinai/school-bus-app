@@ -115,6 +115,7 @@ function handleRequest(params, method) {
         return createJsonResponse(saveSchoolTimetableToSheet(params));
       case 'saveBatchSchoolTimetable':
         return createJsonResponse(saveBatchSchoolTimetableToSheet(params));
+      case 'updateRollCall':
       case 'recordBoarding':
         return createJsonResponse(recordBoardingToSheet(params));
       case 'getUserPermissions':
@@ -471,6 +472,8 @@ function getSchedulesFromSheet(email) {
       '保護者メールアドレス': rowEmail,
       '登校乗車確認': morningBoarding,
       '下校乗車確認': afternoonBoarding,
+      '乗車時刻': morningBoarding,
+      '降車時刻': afternoonBoarding,
       // 英名エイリアス互換
       id: row[0],
       date: formatDateToSlash(row[1]),
@@ -484,7 +487,9 @@ function getSchedulesFromSheet(email) {
       updated_at: String(row[9] || '').trim(),
       guardian_email: rowEmail,
       morning_boarding: morningBoarding,
-      afternoon_boarding: afternoonBoarding
+      afternoon_boarding: afternoonBoarding,
+      boarded_at: morningBoarding,
+      alighted_at: afternoonBoarding
     });
   }
 
@@ -492,60 +497,117 @@ function getSchedulesFromSheet(email) {
 }
 
 /**
- * 3-B. 運転手による乗車確認の記録（点呼タップ連動）
- * パラメータ: date, studentName, tripType ('登校' | '下校'), boarded (true | false), busStop
- * 運行予定カレンダーシートの12列目（登校乗車確認）または13列目（下校乗車確認）に時刻を即時保存
+/**
+ * 3-B. 運転手による乗車・降車点呼の記録（点呼タップ連動: action: "updateRollCall" / "recordBoarding"）
+ * パラメータ: date, studentName, tripType ('登校' | '下校'), boarded (true | false), busStop, status
+ * 対象シート: 「運行予定カレンダー」または「バス予約データ」「運行記録」
+ * 対象列: 「乗車時刻」（boarded_at / 登校乗車確認）および「降車時刻」（alighted_at / 下校乗車確認）
  */
 function recordBoardingToSheet(params) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheetName = '運行予定カレンダー';
-  let sheet = ss.getSheetByName(sheetName);
+  
+  // 1. 対象シートの柔軟な解決（運行予定カレンダー / バス予約データ / 運行記録）
+  const candidateSheetNames = ['運行予定カレンダー', 'バス予約データ', '運行記録'];
+  let sheet = null;
+  let matchedSheetName = '';
+  for (let i = 0; i < candidateSheetNames.length; i++) {
+    const s = ss.getSheetByName(candidateSheetNames[i]);
+    if (s) {
+      sheet = s;
+      matchedSheetName = candidateSheetNames[i];
+      break;
+    }
+  }
+
   if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
+    matchedSheetName = '運行予定カレンダー';
+    sheet = ss.insertSheet(matchedSheetName);
     sheet.appendRow([
       'ID', '日付', '生徒名', '登校ステータス', '下校ステータス',
       '下校1便', '下校2便', '下校3便', '備考', '更新日時', '保護者メールアドレス',
-      '登校乗車確認', '下校乗車確認'
+      '乗車時刻', '降車時刻'
     ]);
-  } else {
-    if (sheet.getLastColumn() < 12 || !sheet.getRange(1, 12).getValue()) {
-      sheet.getRange(1, 12).setValue('登校乗車確認');
+  }
+
+  // 2. ヘッダー行（1行目）の動的解析
+  const lastCol = Math.max(sheet.getLastColumn(), 13);
+  const headerRow = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  
+  let dateCol = 2; // B列
+  let studentCol = 3; // C列
+  let morningStatusCol = 4; // D列
+  let afternoonStatusCol = 5; // E列
+  let updatedAtCol = 10; // J列
+  let parentEmailCol = 11; // K列
+  let morningBoardingCol = -1; // 乗車時刻（登校）
+  let afternoonBoardingCol = -1; // 降車時刻（下校）
+
+  for (let c = 0; c < headerRow.length; c++) {
+    const h = String(headerRow[c] || '').trim();
+    if (!h) continue;
+    const hLower = h.toLowerCase();
+    if (h === '日付' || hLower === 'date') dateCol = c + 1;
+    if (h === '生徒名' || hLower === 'student_name' || hLower === 'studentname') studentCol = c + 1;
+    if (h === '登校ステータス' || hLower === 'morning_status') morningStatusCol = c + 1;
+    if (h === '下校ステータス' || hLower === 'afternoon_status') afternoonStatusCol = c + 1;
+    if (h === '更新日時' || hLower === 'updated_at') updatedAtCol = c + 1;
+    if (h === '保護者メールアドレス' || hLower === 'parent_email') parentEmailCol = c + 1;
+    
+    // 乗車時刻列判定
+    if (h === '乗車時刻' || h === '登校乗車確認' || h === '登校乗車時刻' || hLower === 'boarded_at' || hLower === 'morning_boarding') {
+      morningBoardingCol = c + 1;
     }
-    if (sheet.getLastColumn() < 13 || !sheet.getRange(1, 13).getValue()) {
-      sheet.getRange(1, 13).setValue('下校乗車確認');
+    // 降車時刻列判定
+    if (h === '降車時刻' || h === '下校乗車確認' || h === '下校降車時刻' || hLower === 'alighted_at' || hLower === 'afternoon_boarding') {
+      afternoonBoardingCol = c + 1;
     }
+  }
+
+  // 未検出の場合は列を追加またはデフォルト列を設定
+  if (morningBoardingCol === -1) {
+    morningBoardingCol = 12;
+    sheet.getRange(1, 12).setValue('乗車時刻');
+  }
+  if (afternoonBoardingCol === -1) {
+    afternoonBoardingCol = 13;
+    sheet.getRange(1, 13).setValue('降車時刻');
   }
 
   const dateStr = formatDateToSlash(params.date || params.rawDate);
   const studentName = String(params.studentName || params.student_name || params['生徒名'] || '').trim();
   const tripType = String(params.tripType || params.trip_type || params['便種別'] || '').trim();
   const isMorning = (tripType === '登校' || tripType === 'morning');
-  const targetCol = isMorning ? 12 : 13; // 12: 登校乗車確認, 13: 下校乗車確認
+  const rollCallType = String(params.rollCallType || params.roll_call_type || (isMorning ? 'boarded' : (params.isSchool ? 'boarded' : 'alighted'))).trim();
+  const targetCol = (isMorning || rollCallType === 'boarded') ? morningBoardingCol : afternoonBoardingCol;
 
   const isBoarded = (params.boarded === true || params.boarded === 'true' || params.boarded === 1 || params.boarded === '1');
   const busStop = String(params.busStop || params.bus_stop || params['バス停'] || '').trim();
 
-  // 乗車時刻値の生成（HH:mm）
+  // 時刻打刻値の生成（HH:mm）
   let boardingValue = '';
   if (isBoarded) {
-    const d = new Date();
-    const hh = ('0' + d.getHours()).slice(-2);
-    const mm = ('0' + d.getMinutes()).slice(-2);
-    const timeStr = hh + ':' + mm;
-    boardingValue = busStop ? (timeStr + ' (' + busStop + ')') : timeStr;
+    if (params.timeStr && /^\d{1,2}:\d{2}$/.test(String(params.timeStr).trim())) {
+      boardingValue = String(params.timeStr).trim();
+    } else {
+      const d = new Date();
+      const hh = ('0' + d.getHours()).slice(-2);
+      const mm = ('0' + d.getMinutes()).slice(-2);
+      boardingValue = hh + ':' + mm;
+    }
   }
 
   const lastRow = sheet.getLastRow();
   let targetRow = -1;
   let currentId = null;
 
-  // 既存行検索: B列(日付) と C列(生徒名)
+  // 既存行検索: 日付列 と 生徒名列
   if (lastRow >= 2) {
-    const dataRange = sheet.getRange(2, 1, lastRow - 1, 3);
+    const scanCols = Math.max(dateCol, studentCol);
+    const dataRange = sheet.getRange(2, 1, lastRow - 1, scanCols);
     const rows = dataRange.getValues();
     for (let i = 0; i < rows.length; i++) {
-      const rowDate = formatDateToSlash(rows[i][1]);
-      const rowStudent = String(rows[i][2]).trim();
+      const rowDate = formatDateToSlash(rows[i][dateCol - 1]);
+      const rowStudent = String(rows[i][studentCol - 1]).trim();
       if (rowDate === dateStr && rowStudent === studentName) {
         targetRow = i + 2;
         currentId = rows[i][0];
@@ -557,13 +619,16 @@ function recordBoardingToSheet(params) {
   const currentDateTime = formatCurrentDateTimeJ();
 
   if (targetRow > 0) {
-    // 既存行の該当乗車確認列をピンポイント更新
+    // 既存行の該当乗車/降車時刻列を更新
     sheet.getRange(targetRow, targetCol).setValue(boardingValue);
-    sheet.getRange(targetRow, 10).setValue(currentDateTime); // J列: 更新日時
+    if (updatedAtCol > 0) {
+      sheet.getRange(targetRow, updatedAtCol).setValue(currentDateTime);
+    }
 
     return {
       status: 'success',
       action: 'updated',
+      sheet: matchedSheetName,
       row: targetRow,
       id: currentId,
       date: dateStr,
@@ -571,10 +636,15 @@ function recordBoardingToSheet(params) {
       tripType: isMorning ? '登校' : '下校',
       boarded: isBoarded,
       boardingValue: boardingValue,
-      message: isBoarded ? ('乗車確認を記録しました: ' + boardingValue) : '乗車確認を取り消しました'
+      boarded_at: (isMorning || rollCallType === 'boarded') ? boardingValue : '',
+      alighted_at: (!isMorning && rollCallType === 'alighted') ? boardingValue : '',
+      rollCallType: rollCallType,
+      message: isBoarded 
+        ? (((isMorning || rollCallType === 'boarded') ? '乗車' : '降車') + '確認を記録しました: ' + boardingValue)
+        : (((isMorning || rollCallType === 'boarded') ? '乗車' : '降車') + '確認を取り消しました')
     };
   } else {
-    // 該当行がない場合（事前予約なしの当日臨時乗車等の安全策）
+    // 該当行がない場合（未予約日の臨時乗降時）
     const newRow = lastRow + 1;
     let newId = newRow - 1;
     if (lastRow >= 2) {
@@ -600,26 +670,23 @@ function recordBoardingToSheet(params) {
       }
     } catch (e) {}
 
-    const rowValues = [
-      [
-        newId,
-        dateStr,
-        studentName,
-        isMorning ? '乗る' : '',
-        '',
-        '', '', '',
-        '運転手点呼自動作成',
-        currentDateTime,
-        parentEmail,
-        isMorning ? boardingValue : '',
-        !isMorning ? boardingValue : ''
-      ]
-    ];
-    sheet.getRange(newRow, 1, 1, 13).setValues(rowValues);
+    const maxColCount = Math.max(lastCol, morningBoardingCol, afternoonBoardingCol);
+    const newRowData = new Array(maxColCount).fill('');
+    newRowData[0] = newId;
+    newRowData[dateCol - 1] = dateStr;
+    newRowData[studentCol - 1] = studentName;
+    newRowData[morningStatusCol - 1] = isMorning ? '乗る' : '';
+    newRowData[8] = '運転手点呼自動作成'; // 備考
+    if (updatedAtCol > 0) newRowData[updatedAtCol - 1] = currentDateTime;
+    if (parentEmailCol > 0) newRowData[parentEmailCol - 1] = parentEmail;
+    newRowData[targetCol - 1] = boardingValue;
+
+    sheet.getRange(newRow, 1, 1, maxColCount).setValues([newRowData]);
 
     return {
       status: 'success',
       action: 'inserted',
+      sheet: matchedSheetName,
       row: newRow,
       id: newId,
       date: dateStr,
@@ -627,7 +694,12 @@ function recordBoardingToSheet(params) {
       tripType: isMorning ? '登校' : '下校',
       boarded: isBoarded,
       boardingValue: boardingValue,
-      message: isBoarded ? ('乗車確認（新規作成）を記録しました: ' + boardingValue) : '乗車確認を取り消しました'
+      boarded_at: (isMorning || rollCallType === 'boarded') ? boardingValue : '',
+      alighted_at: (!isMorning && rollCallType === 'alighted') ? boardingValue : '',
+      rollCallType: rollCallType,
+      message: isBoarded 
+        ? (((isMorning || rollCallType === 'boarded') ? '乗車' : '降車') + '確認（新規作成）を記録しました: ' + boardingValue)
+        : (((isMorning || rollCallType === 'boarded') ? '乗車' : '降車') + '確認を取り消しました')
     };
   }
 }
