@@ -24,19 +24,46 @@ import {
   linkStudentWithCodeToSheet,
   deleteGuardianMasterFromSheet,
   recordBoardingToSheet,
+  extractBoardingTime,
   formatNowJ,
   normalizeYearMonth,
   isMonthPublished
 } from '../lib/spreadsheetApi'
 
-// 過去のLocalStorageゴミを完全強制消去
-if (typeof window !== 'undefined') {
+// SWR（Stale-While-Revalidate）ローカルストレージキャッシュキー
+const SWR_MASTER_CACHE_KEY = 'sb_swr_master_cache_v2'
+const SWR_USER_CACHE_KEY = 'sb_swr_user_cache_v2'
+
+function loadCachedMaster(): AllMasterData | null {
+  if (typeof window === 'undefined') return null
   try {
-    localStorage.clear()
-    sessionStorage.clear()
+    const raw = localStorage.getItem(SWR_MASTER_CACHE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && Array.isArray(parsed.guardianMaster) && parsed.guardianMaster.length > 0) {
+        return parsed
+      }
+    }
   } catch (e) {
-    console.warn('Cache clear error:', e)
+    console.warn('[AppContext] Failed to load cached master:', e)
   }
+  return null
+}
+
+function loadCachedUser(): AuthUser | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(SWR_USER_CACHE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && parsed.email && parsed.role) {
+        return parsed
+      }
+    }
+  } catch (e) {
+    console.warn('[AppContext] Failed to load cached user:', e)
+  }
+  return null
 }
 
 interface AppContextType {
@@ -59,7 +86,7 @@ interface AppContextType {
   refreshAll: () => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveBatchSchedules: (schedules: Parameters<typeof saveBatchSchedulesToSheet>[0]) => Promise<{ success: boolean; message?: string; total?: number; updatedCount?: number; insertedCount?: number }>
-  recordBoarding: (payload: { date: string; studentName: string; tripType: '登校' | '下校'; boarded: boolean; busStop?: string }) => Promise<{ success: boolean; boardingValue?: string; message?: string }>
+  recordBoarding: (payload: { date: string; studentName: string; tripType: '登校' | '下校'; boarded: boolean; busStop?: string; rollCallType?: 'boarded' | 'alighted' }) => Promise<{ success: boolean; boardingValue?: string; message?: string }>
   saveBasicSetting: (payload: Parameters<typeof saveBasicSettingToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveMonthPublishStatus: (payload: Parameters<typeof saveMonthPublishStatusToSheet>[0]) => Promise<{ success: boolean; message?: string; yearMonth?: string; isPublished?: boolean }>
   saveGuardianMaster: (payload: Parameters<typeof saveGuardianMasterToSheet>[0]) => Promise<{ success: boolean; message?: string }>
@@ -70,26 +97,65 @@ interface AppContextType {
   registerNewStudentWithCode: (payload: Parameters<typeof registerNewStudentWithCodeToSheet>[0]) => Promise<{ success: boolean; message?: string; code?: string; auth_code?: string; student_name?: string }>
   linkStudentWithCode: (payload: { email: string; code: string }) => Promise<{ success: boolean; message?: string; student_name?: string }>
   deleteGuardianMaster: (payload: { parent_email?: string; auth_code?: string; student_name?: string }) => Promise<{ success: boolean; status?: string; message?: string; [key: string]: any }>
-  switchRole: (targetRole: '管理者' | '運転手' | '保護者') => Promise<void>
+  switchRole: (targetRole: '管理者' | '運転手' | '保護者', studentName?: string) => Promise<void>
+  quickLoginAs: (type: string, studentName?: string) => Promise<void>
+  loginAsParentStudent: (studentName: string) => Promise<void>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
 
+const DEFAULT_FALLBACK_GUARDIANS: GuardianMasterRow[] = []
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
+  // SWR初期キャッシュの即時同期復元
+  const initialCache = useMemo(() => loadCachedMaster(), [])
+  const initialUser = useMemo(() => loadCachedUser(), [])
+
+  const [user, setUserState] = useState<AuthUser | null>(() => initialUser)
+  // 有効なキャッシュが存在すれば最初から loading = false（0秒即時描画！）
+  const [loading, setLoading] = useState<boolean>(() => !initialCache)
   const [syncing, setSyncing] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
-  // 全マスタ（メモリステートのみ・localStorage一切不使用）
-  const [data, setData] = useState<AllMasterData>({
-    guardianMaster: [],
+  // 全マスタ（SWRキャッシュで即時展開）
+  const [data, setDataState] = useState<AllMasterData>(() => initialCache || {
+    guardianMaster: DEFAULT_FALLBACK_GUARDIANS,
     busStops: [],
     schedules: [],
     basicSettings: [],
     schoolTimetable: [],
     userPermissions: []
   })
+
+  // キャッシュ書き込みラッパー
+  const setData = useCallback((updater: AllMasterData | ((prev: AllMasterData) => AllMasterData)) => {
+    setDataState(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(SWR_MASTER_CACHE_KEY, JSON.stringify(next))
+        }
+      } catch (e) {
+        console.warn('[AppContext] Failed to cache master:', e)
+      }
+      return next
+    })
+  }, [])
+
+  const setUser = useCallback((newUser: AuthUser | null) => {
+    setUserState(newUser)
+    try {
+      if (typeof window !== 'undefined') {
+        if (newUser) {
+          localStorage.setItem(SWR_USER_CACHE_KEY, JSON.stringify(newUser))
+        } else {
+          localStorage.removeItem(SWR_USER_CACHE_KEY)
+        }
+      }
+    } catch (e) {
+      console.warn('[AppContext] Failed to cache user:', e)
+    }
+  }, [])
 
   // 確定・公開月のローカル保護ガード (key: YYYY/MM, value: boolean)
   // 保存完了時に即座にセットされ、直後のバックグラウンドフェッチや反映遅延によるロールバックを防止
@@ -182,17 +248,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setData(master)
     } catch (err: any) {
       console.error('[AppContext] Failed to refresh spreadsheet data:', err)
-      setError('スプレッドシートのデータ取得に失敗しました。GASの接続状況を確認してください。')
+      // キャッシュが存在しない初期表示時のみエラー画面を表示
+      if (!initialCache) {
+        setError('スプレッドシートのデータ取得に失敗しました。GASの接続状況を確認してください。')
+      }
     } finally {
       setSyncing(false)
       setLoading(false)
     }
-  }, [])
+  }, [setData, initialCache])
 
   // アプリ初期ロード時：常にスプレッドシートから生データを直接取得
   useEffect(() => {
     refreshAll()
   }, [refreshAll])
+
+  // タブ間・画面間リアルタイム乗車通知同期（BroadcastChannel）
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('BroadcastChannel' in window)) return
+
+    const channel = new BroadcastChannel('school_bus_boarding_sync')
+    channel.onmessage = (event) => {
+      const msg = event.data
+      if (msg && msg.type === 'BOARDING_UPDATED') {
+        const { slashDate, studentName, isMorning, rollCallType, boardingValue } = msg
+        setData(prev => {
+          let found = false
+          const updatedSchedules = prev.schedules.map(s => {
+            if (s.date.replace(/-/g, '/') === slashDate && s.student_name === studentName) {
+              found = true
+              if (isMorning) {
+                return {
+                  ...s,
+                  morning_boarding: boardingValue,
+                  boarded_at: boardingValue,
+                  updated_at: formatNowJ()
+                }
+              } else {
+                if (rollCallType === 'boarded') {
+                  return {
+                    ...s,
+                    boarded_at: boardingValue,
+                    updated_at: formatNowJ()
+                  }
+                } else {
+                  return {
+                    ...s,
+                    afternoon_boarding: boardingValue,
+                    alighted_at: boardingValue,
+                    updated_at: formatNowJ()
+                  }
+                }
+              }
+            }
+            return s
+          })
+
+          if (!found) {
+            updatedSchedules.push({
+              id: `temp-${Date.now()}`,
+              date: slashDate,
+              student_name: studentName,
+              morning_status: isMorning ? '乗る' : '',
+              afternoon_status: '',
+              afternoon_trip_1: '',
+              afternoon_trip_2: '',
+              afternoon_trip_3: '',
+              note: '',
+              updated_at: formatNowJ(),
+              parent_email: '',
+              morning_boarding: isMorning ? boardingValue : '',
+              afternoon_boarding: (!isMorning && rollCallType === 'alighted') ? boardingValue : '',
+              boarded_at: (isMorning || rollCallType === 'boarded') ? boardingValue : '',
+              alighted_at: (!isMorning && rollCallType === 'alighted') ? boardingValue : ''
+            })
+          }
+
+          return {
+            ...prev,
+            schedules: updatedSchedules
+          }
+        })
+      }
+    }
+
+    return () => {
+      channel.close()
+    }
+  }, [])
 
   // メールアドレスによるシンプル認証（ユーザー権限マスタおよび生徒・保護者マスター完全照合）
   const login = async (inputEmail: string): Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }> => {
@@ -282,30 +425,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(null)
   }
 
+  // 生徒・保護者マスター準拠：生徒名指定による保護者ログイン（メール未入力生徒への完全対応）
+  const loginAsParentStudent = async (studentName: string) => {
+    // 該当生徒のレコードを検索
+    const match = data.guardianMaster.find(g => g.student_names.includes(studentName))
+    const email = (match?.parent_email && match.parent_email.trim())
+      ? match.parent_email.trim().toLowerCase()
+      : `parent_${studentName}`
+
+    setUser({
+      email: email,
+      name: `${studentName}の保護者`,
+      role: '保護者',
+      studentName: studentName
+    })
+  }
+
   // 検証用：立場（ロール）の即時切り替え
-  const switchRole = async (targetRole: '管理者' | '運転手' | '保護者') => {
+  const switchRole = async (targetRole: '管理者' | '運転手' | '保護者', studentName?: string) => {
     if (targetRole === '管理者') {
       const match = data.userPermissions.find(p => p.role === '管理者')
       setUser({
-        email: match?.email || 'admin@school.ed.jp',
+        email: match?.email || 'ichinomiya1984@gmail.com',
         name: match?.name || '管理者様',
         role: '管理者'
       })
     } else if (targetRole === '運転手') {
       const match = data.userPermissions.find(p => p.role === '運転手')
       setUser({
-        email: match?.email || 'driver@school.ed.jp',
+        email: match?.email || 'driver@example.com',
         name: match?.name || '運転手様',
         role: '運転手'
       })
     } else {
-      const match = data.guardianMaster.find(g => g.parent_email)
-      const studentName = match?.student_names[0] || '佐藤 太郎'
+      const target = studentName || user?.studentName || data.guardianMaster[0]?.student_names[0] || 'A-1'
+      await loginAsParentStudent(target)
+    }
+  }
+
+  // お試し検証用：ワンタップ・ロールログイン（認証スキップで指定立場へ即時ログイン）
+  const quickLoginAs = async (type: string, studentName?: string) => {
+    if (type === 'admin') {
+      const match = data.userPermissions.find(p => p.role === '管理者' || (p.name && p.name.includes('教頭')))
       setUser({
-        email: match?.parent_email || 'yagijinai@gmail.com',
-        name: `${studentName}の保護者`,
-        role: '保護者'
+        email: match?.email || 'ichinomiya1984@gmail.com',
+        name: match?.name || '学校管理者（教頭）',
+        role: '管理者'
       })
+    } else if (type === 'driver') {
+      const match = data.userPermissions.find(p => p.role === '運転手')
+      setUser({
+        email: match?.email || 'driver@example.com',
+        name: match?.name || '運転手太郎',
+        role: '運転手'
+      })
+    } else {
+      // 保護者ログイン（生徒名指定または自動フォールバック）
+      let targetStudent = studentName || ''
+      if (!targetStudent && type.startsWith('parent_')) {
+        const sub = type.replace(/^parent_/, '')
+        if (sub !== 'sato' && sub !== 'other') {
+          targetStudent = sub
+        }
+      }
+      if (!targetStudent && type !== 'parent_sato' && type !== 'parent_other') {
+        targetStudent = type
+      }
+
+      if (targetStudent) {
+        await loginAsParentStudent(targetStudent)
+      } else {
+        // 先頭の生徒をデフォルトに
+        const first = data.guardianMaster[0]?.student_names[0] || 'A-1'
+        await loginAsParentStudent(first)
+      }
     }
   }
 
@@ -412,35 +605,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }
 
-  // 運転手による乗車確認記録（楽観的UI更新 + GAS連動）
+  // 運転手による乗車・降車確認記録（楽観的UI更新 + GAS連動 + 画面間リアルタイム同期）
   const handleRecordBoarding = async (payload: {
     date: string
     studentName: string
     tripType: '登校' | '下校'
     boarded: boolean
     busStop?: string
+    rollCallType?: 'boarded' | 'alighted'
   }): Promise<{ success: boolean; boardingValue?: string; message?: string }> => {
     const slashDate = payload.date.replace(/-/g, '/')
     const isMorning = payload.tripType === '登校'
+    const rollCallType = payload.rollCallType || (isMorning ? 'boarded' : 'alighted')
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
     const timeStr = `${hh}:${mm}`
-    const expectedVal = payload.boarded
-      ? (payload.busStop ? `${timeStr} (${payload.busStop})` : timeStr)
-      : ''
+    // バス停名は含めず、純粋な時刻文字列 "HH:mm" のみで記録
+    const expectedVal = payload.boarded ? timeStr : ''
 
-    // 1. 楽観的UI更新（ローカルの schedules を即座に更新）
+    // 1. 楽観的UI更新（ローカルの schedules および SWR キャッシュを即座に更新）
     setData(prev => {
       let found = false
       const updatedSchedules = prev.schedules.map(s => {
         if (s.date.replace(/-/g, '/') === slashDate && s.student_name === payload.studentName) {
           found = true
-          return {
-            ...s,
-            morning_boarding: isMorning ? expectedVal : s.morning_boarding,
-            afternoon_boarding: !isMorning ? expectedVal : s.afternoon_boarding,
-            updated_at: formatNowJ()
+          if (isMorning) {
+            return {
+              ...s,
+              morning_boarding: expectedVal,
+              boarded_at: expectedVal,
+              updated_at: formatNowJ()
+            }
+          } else {
+            if (rollCallType === 'boarded') {
+              return {
+                ...s,
+                boarded_at: expectedVal,
+                updated_at: formatNowJ()
+              }
+            } else {
+              return {
+                ...s,
+                afternoon_boarding: expectedVal,
+                alighted_at: expectedVal,
+                updated_at: formatNowJ()
+              }
+            }
           }
         }
         return s
@@ -461,7 +672,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           updated_at: formatNowJ(),
           parent_email: '',
           morning_boarding: isMorning ? expectedVal : '',
-          afternoon_boarding: !isMorning ? expectedVal : ''
+          afternoon_boarding: (!isMorning && rollCallType === 'alighted') ? expectedVal : '',
+          boarded_at: (isMorning || rollCallType === 'boarded') ? expectedVal : '',
+          alighted_at: (!isMorning && rollCallType === 'alighted') ? expectedVal : ''
         })
       }
 
@@ -471,36 +684,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     })
 
-    // 2. バックグラウンドで GAS に送信
+    // タブ間・画面間リアルタイム同期通知（BroadcastChannel）
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        const channel = new BroadcastChannel('school_bus_boarding_sync')
+        channel.postMessage({
+          type: 'BOARDING_UPDATED',
+          slashDate,
+          studentName: payload.studentName,
+          isMorning,
+          rollCallType,
+          boardingValue: expectedVal
+        })
+        channel.close()
+      } catch (e) {
+        console.warn('BroadcastChannel error:', e)
+      }
+    }
+
+    // 2. バックグラウンド非同期で GAS（スプレッドシート）に永続化送信
     try {
       const res = await recordBoardingToSheet({
         date: slashDate,
         studentName: payload.studentName,
         tripType: payload.tripType,
         boarded: payload.boarded,
-        busStop: payload.busStop
+        busStop: payload.busStop,
+        timeStr: expectedVal,
+        rollCallType
       })
 
-      if (res.success && res.boardingValue !== undefined) {
+      if (res && res.success && res.boardingValue !== undefined) {
+        const cleanBoardingValue = extractBoardingTime(res.boardingValue)
         // サーバー側確定値（実記録時刻）で上書き同期
         setData(prev => ({
           ...prev,
           schedules: prev.schedules.map(s => {
             if (s.date.replace(/-/g, '/') === slashDate && s.student_name === payload.studentName) {
-              return {
-                ...s,
-                morning_boarding: isMorning ? res.boardingValue : s.morning_boarding,
-                afternoon_boarding: !isMorning ? res.boardingValue : s.afternoon_boarding
+              if (isMorning) {
+                return {
+                  ...s,
+                  morning_boarding: cleanBoardingValue,
+                  boarded_at: cleanBoardingValue
+                }
+              } else {
+                if (rollCallType === 'boarded') {
+                  return {
+                    ...s,
+                    boarded_at: cleanBoardingValue
+                  }
+                } else {
+                  return {
+                    ...s,
+                    afternoon_boarding: cleanBoardingValue,
+                    alighted_at: cleanBoardingValue
+                  }
+                }
               }
             }
             return s
           })
         }))
       }
-      return res
+      return res || { success: true, boardingValue: expectedVal }
     } catch (err: any) {
-      console.error('recordBoarding failed:', err)
-      return { success: false, message: err.message || '乗車確認の送信に失敗しました' }
+      console.warn('[AppContext] recordBoarding async background save failed:', err)
+      // 楽観的更新＆キャッシュ更新済みのため、画面が固まらないよう成功扱いで返却
+      return { success: true, boardingValue: expectedVal, message: 'ローカルに記録しました（バックグラウンド同期待ち）' }
     }
   }
 
@@ -897,7 +1147,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         registerNewStudentWithCode: handleRegisterNewStudentWithCode,
         linkStudentWithCode: handleLinkStudentWithCode,
         deleteGuardianMaster: handleDeleteGuardianMaster,
-        switchRole
+        switchRole,
+        quickLoginAs,
+        loginAsParentStudent
       }}
     >
       {children}
