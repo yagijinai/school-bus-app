@@ -10,7 +10,7 @@ import {
   Ban,
   Clock
 } from 'lucide-react'
-import type { SchoolTimetableRow, BasicSettingRow } from '../types/spreadsheet'
+import type { SchoolTimetableRow, BasicSettingRow, ScheduleCalendarRow } from '../types/spreadsheet'
 import { formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
 
@@ -19,6 +19,7 @@ interface SchoolTimetableModalProps {
   onClose: () => void
   schoolTimetable: SchoolTimetableRow[]
   basicSettings: BasicSettingRow[]
+  schedules?: ScheduleCalendarRow[]
   initialDate?: Date
 }
 
@@ -27,6 +28,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
   onClose,
   schoolTimetable,
   basicSettings,
+  schedules = [],
   initialDate
 }) => {
   const [currentDate, setCurrentDate] = useState<Date>(() => initialDate || new Date())
@@ -34,6 +36,17 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
   const [mobileFilter, setMobileFilter] = useState<'all' | 'weekday'>('weekday')
 
   const todayItemRef = useRef<HTMLDivElement>(null)
+
+  // モーダルオープン時または初期日付変更時に確実に当月へ同期
+  useEffect(() => {
+    if (isOpen) {
+      if (initialDate) {
+        setCurrentDate(initialDate)
+      } else {
+        setCurrentDate(new Date())
+      }
+    }
+  }, [isOpen, initialDate])
 
   useEffect(() => {
     if (isOpen) {
@@ -91,6 +104,66 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
     return { isSuspended: false, name: '', note: '' }
   }
 
+  // 該当日付の便別時刻を安全に抽出（schoolTimetable と schedules の両方から網羅的にマージ）
+  const getDayTripTimes = (dateStr: string) => {
+    const timetable = schoolTimetable.find(t => t.date.replace(/-/g, '/') === dateStr)
+    const daySched = schedules.find(s => s.date.replace(/-/g, '/') === dateStr)
+
+    const morning = formatTimeOnly(
+      timetable?.morning_trip ||
+      (timetable as any)?.['登校便'] ||
+      (daySched?.morning_status === '乗る' ? (daySched as any)?.morning_trip : '')
+    )
+    const t1 = formatTimeOnly(
+      timetable?.afternoon_trip_1 ||
+      (timetable as any)?.trip_1 ||
+      (timetable as any)?.afternoon_1 ||
+      (timetable as any)?.['下校1便'] ||
+      (timetable as any)?.['下校１便'] ||
+      daySched?.afternoon_trip_1 ||
+      (daySched as any)?.trip_1 ||
+      (daySched as any)?.['下校1便']
+    )
+    const t2 = formatTimeOnly(
+      timetable?.afternoon_trip_2 ||
+      (timetable as any)?.trip_2 ||
+      (timetable as any)?.afternoon_2 ||
+      (timetable as any)?.['下校2便'] ||
+      (timetable as any)?.['下校２便'] ||
+      daySched?.afternoon_trip_2 ||
+      (daySched as any)?.trip_2 ||
+      (daySched as any)?.['下校2便']
+    )
+    const t3 = formatTimeOnly(
+      timetable?.afternoon_trip_3 ||
+      (timetable as any)?.trip_3 ||
+      (timetable as any)?.afternoon_3 ||
+      (timetable as any)?.['下校3便'] ||
+      (timetable as any)?.['下校３便'] ||
+      daySched?.afternoon_trip_3 ||
+      (daySched as any)?.trip_3 ||
+      (daySched as any)?.['下校3便']
+    )
+    const label = (
+      timetable?.calendar_label ||
+      (timetable as any)?.calendar_display ||
+      (timetable as any)?.['カレンダー表示用'] ||
+      timetable?.note ||
+      (timetable as any)?.['備考'] ||
+      ''
+    ).trim()
+
+    return {
+      timetable,
+      morning,
+      t1,
+      t2,
+      t3,
+      label,
+      hasTrips: !!(morning || t1 || t2 || t3)
+    }
+  }
+
   // 1. モバイル用：当月の日別縦型リストデータ（1日〜末日）
   const monthDays = useMemo(() => {
     const year = currentDate.getFullYear()
@@ -110,6 +183,11 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       suspension: { isSuspended: boolean; name: string; note: string }
       timetable: SchoolTimetableRow | undefined
       hasTrips: boolean
+      morning: string
+      t1: string
+      t2: string
+      t3: string
+      label: string
     }> = []
 
     for (let d = 1; d <= lastDay; d++) {
@@ -119,13 +197,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
       const holiday = getJapaneseHolidayName(dateStr)
       const suspension = checkSuspension(dateStr)
-      const timetable = schoolTimetable.find(t => t.date.replace(/-/g, '/') === dateStr)
-
-      const morning = formatTimeOnly(timetable?.morning_trip)
-      const t1 = formatTimeOnly(timetable?.afternoon_trip_1)
-      const t2 = formatTimeOnly(timetable?.afternoon_trip_2)
-      const t3 = formatTimeOnly(timetable?.afternoon_trip_3)
-      const hasTrips = !!(morning || t1 || t2 || t3)
+      const tripInfo = getDayTripTimes(dateStr)
 
       list.push({
         dateStr,
@@ -136,13 +208,18 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         isWeekend,
         holiday,
         suspension,
-        timetable,
-        hasTrips
+        timetable: tripInfo.timetable,
+        hasTrips: tripInfo.hasTrips,
+        morning: tripInfo.morning,
+        t1: tripInfo.t1,
+        t2: tripInfo.t2,
+        t3: tripInfo.t3,
+        label: tripInfo.label
       })
     }
 
     return list
-  }, [currentDate, todayStr, schoolTimetable, basicSettings])
+  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings])
 
   // モバイル表示でフィルター適用
   const filteredMonthDays = useMemo(() => {
@@ -171,6 +248,11 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       holiday: string | null
       suspension: { isSuspended: boolean; name: string; note: string }
       timetable: SchoolTimetableRow | undefined
+      morning: string
+      t1: string
+      t2: string
+      t3: string
+      label: string
     }> = []
 
     // 前月余白
@@ -180,6 +262,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       const prevYear = month === 0 ? year - 1 : year
       const dateStr = `${prevYear}/${pad(prevMonth)}/${pad(d)}`
       const dayDate = new Date(prevYear, prevMonth - 1, d)
+      const tripInfo = getDayTripTimes(dateStr)
       days.push({
         dateStr,
         dayNumber: d,
@@ -188,7 +271,12 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         dayOfWeek: dayDate.getDay(),
         holiday: getJapaneseHolidayName(dateStr),
         suspension: checkSuspension(dateStr),
-        timetable: schoolTimetable.find(t => t.date.replace(/-/g, '/') === dateStr)
+        timetable: tripInfo.timetable,
+        morning: tripInfo.morning,
+        t1: tripInfo.t1,
+        t2: tripInfo.t2,
+        t3: tripInfo.t3,
+        label: tripInfo.label
       })
     }
 
@@ -196,6 +284,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
     for (let d = 1; d <= totalDays; d++) {
       const dateStr = `${year}/${pad(month + 1)}/${pad(d)}`
       const dayDate = new Date(year, month, d)
+      const tripInfo = getDayTripTimes(dateStr)
       days.push({
         dateStr,
         dayNumber: d,
@@ -204,7 +293,12 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         dayOfWeek: dayDate.getDay(),
         holiday: getJapaneseHolidayName(dateStr),
         suspension: checkSuspension(dateStr),
-        timetable: schoolTimetable.find(t => t.date.replace(/-/g, '/') === dateStr)
+        timetable: tripInfo.timetable,
+        morning: tripInfo.morning,
+        t1: tripInfo.t1,
+        t2: tripInfo.t2,
+        t3: tripInfo.t3,
+        label: tripInfo.label
       })
     }
 
@@ -215,6 +309,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       const nextYear = month + 2 > 12 ? year + 1 : year
       const dateStr = `${nextYear}/${pad(nextMonth)}/${pad(d)}`
       const dayDate = new Date(nextYear, nextMonth - 1, d)
+      const tripInfo = getDayTripTimes(dateStr)
       days.push({
         dateStr,
         dayNumber: d,
@@ -223,12 +318,17 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         dayOfWeek: dayDate.getDay(),
         holiday: getJapaneseHolidayName(dateStr),
         suspension: checkSuspension(dateStr),
-        timetable: schoolTimetable.find(t => t.date.replace(/-/g, '/') === dateStr)
+        timetable: tripInfo.timetable,
+        morning: tripInfo.morning,
+        t1: tripInfo.t1,
+        t2: tripInfo.t2,
+        t3: tripInfo.t3,
+        label: tripInfo.label
       })
     }
 
     return days
-  }, [currentDate, todayStr, schoolTimetable, basicSettings])
+  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings])
 
   if (!isOpen) return null
 
@@ -379,11 +479,11 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
               </div>
             ) : (
               filteredMonthDays.map(item => {
-                const morning = formatTimeOnly(item.timetable?.morning_trip)
-                const t1 = formatTimeOnly(item.timetable?.afternoon_trip_1)
-                const t2 = formatTimeOnly(item.timetable?.afternoon_trip_2)
-                const t3 = formatTimeOnly(item.timetable?.afternoon_trip_3)
-                const label = (item.timetable?.calendar_label || '').trim()
+                const morning = item.morning
+                const t1 = item.t1
+                const t2 = item.t2
+                const t3 = item.t3
+                const label = item.label
                 const isSusp = item.suspension.isSuspended
 
                 return (
@@ -540,11 +640,11 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
               ))}
 
               {gridDays.map((day, idx) => {
-                const morning = formatTimeOnly(day.timetable?.morning_trip)
-                const t1 = formatTimeOnly(day.timetable?.afternoon_trip_1)
-                const t2 = formatTimeOnly(day.timetable?.afternoon_trip_2)
-                const t3 = formatTimeOnly(day.timetable?.afternoon_trip_3)
-                const label = (day.timetable?.calendar_label || '').trim()
+                const morning = day.morning
+                const t1 = day.t1
+                const t2 = day.t2
+                const t3 = day.t3
+                const label = day.label
                 const isSun = day.dayOfWeek === 0
                 const isSat = day.dayOfWeek === 6
 

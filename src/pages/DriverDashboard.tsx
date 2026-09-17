@@ -972,6 +972,8 @@ export const DriverDashboard: React.FC = () => {
         onClose={() => setIsTimetableModalOpen(false)}
         schoolTimetable={schoolTimetable}
         basicSettings={basicSettings}
+        schedules={schedules}
+        initialDate={new Date(selectedDate.replace(/\//g, '-'))}
       />
     </div>
   )

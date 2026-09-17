@@ -278,11 +278,11 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
   const schoolTimetable: SchoolTimetableRow[] = (Array.isArray(rawTimetable) ? rawTimetable : []).map((row: any) => ({
     date: toSlashDate(row.date || row['日付'] || ''),
     morning_trip: formatTimeOnly(row.morning_trip || row['登校便'] || ''),
-    afternoon_trip_1: formatTimeOnly(row.afternoon_trip_1 || row['下校1便'] || ''),
-    afternoon_trip_2: formatTimeOnly(row.afternoon_trip_2 || row['下校2便'] || ''),
-    afternoon_trip_3: formatTimeOnly(row.afternoon_trip_3 || row['下校3便'] || ''),
+    afternoon_trip_1: formatTimeOnly(row.afternoon_trip_1 || row.trip_1 || row.afternoon_1 || row['下校1便'] || row['下校１便'] || ''),
+    afternoon_trip_2: formatTimeOnly(row.afternoon_trip_2 || row.trip_2 || row.afternoon_2 || row['下校2便'] || row['下校２便'] || ''),
+    afternoon_trip_3: formatTimeOnly(row.afternoon_trip_3 || row.trip_3 || row.afternoon_3 || row['下校3便'] || row['下校３便'] || ''),
     note: String(row.note || row['備考'] || '').trim(),
-    calendar_label: String(row.calendar_label || row['カレンダー表示用'] || '').trim()
+    calendar_label: String(row.calendar_label || row.calendar_display || row['カレンダー表示用'] || '').trim()
   })).filter(t => t.date)
 
   // ⑥ ユーザー権限マスタ (A: メールアドレス, B: 指名, C: 役割)
