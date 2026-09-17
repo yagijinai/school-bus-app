@@ -7,10 +7,11 @@ import {
   Plus, UserPlus, AlertCircle, X, Calendar, CalendarDays, Sparkles, Check,
   Lock, Circle
 } from 'lucide-react'
-import { toSlashDate, toHyphenDate, formatTimeToHHmm, formatTimeOnly, extractBoardingTime, isMonthPublished } from '../lib/spreadsheetApi'
+import { toSlashDate, toHyphenDate, formatTimeToHHmm, extractBoardingTime, isMonthPublished } from '../lib/spreadsheetApi'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { SchoolTimetableModal } from '../components/SchoolTimetableModal'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
+import { checkSuspension, isOperatingDay } from '../lib/suspensionUtils'
 
 export const ParentDashboard: React.FC = () => {
   const navigate = useNavigate()
@@ -351,31 +352,10 @@ export const ParentDashboard: React.FC = () => {
     return busStops.find(b => b.name === myGuardian.bus_stop_name) || null
   }, [myGuardian, busStops])
 
-  // 運休期間判定（スプレッドシート「基本設定・運休期間」より判定）
-  const checkSuspension = (dateSlash: string) => {
-    for (const b of basicSettings) {
-      const isSuspended = b.standard_operation === '運休' || b.content_time.includes('運休')
-      if (!isSuspended) continue
-      const start = b.start_date
-      const end = b.end_date
-      if (!start || !end) continue
-
-      if (start <= end) {
-        if (dateSlash >= start && dateSlash <= end) {
-          return { isSuspended: true, name: b.setting_name, note: b.note }
-        }
-      } else {
-        // 年跨ぎ
-        const dMD = dateSlash.slice(5)
-        const sMD = start.slice(5)
-        const eMD = end.slice(5)
-        if (dMD >= sMD || dMD <= eMD) {
-          return { isSuspended: true, name: b.setting_name, note: b.note }
-        }
-      }
-    }
-    return { isSuspended: false, name: '', note: '' }
-  }
+  // 運休期間判定（スプレッドシート「基本設定・運休期間」より判定：MM/DD年非依存対応）
+  const checkSuspensionRow = useCallback((dateSlash: string) => {
+    return checkSuspension(dateSlash, basicSettings)
+  }, [basicSettings])
 
   // 表示中週に含まれる年月の判定
   const weekYearMonths = useMemo(() => {
@@ -422,57 +402,15 @@ export const ParentDashboard: React.FC = () => {
     return weekYearMonths.map(formatYearMonthJapanese).join('・')
   }, [weekYearMonths])
 
-  // 運行日判定（祝日・長期休業・運休・休校日・土日は一括予約から完全除外・スキップ）
-  const isOperatingDay = useCallback((dateSlash: string): boolean => {
-    const cleanDate = toSlashDate(dateSlash)
-    const parts = cleanDate.split('/')
-    if (parts.length !== 3) return false
-    const year = parseInt(parts[0], 10)
-    const month = parseInt(parts[1], 10) - 1
-    const day = parseInt(parts[2], 10)
-    const d = new Date(year, month, day)
+  // 運行日判定（祝日・長期休業・運休・休校日・土日は予約一覧・一括反映から完全除外）
+  const isOperatingDayRow = useCallback((dateSlash: string): boolean => {
+    return isOperatingDay(dateSlash, { basicSettings, schoolTimetable, schedules })
+  }, [basicSettings, schoolTimetable, schedules])
 
-    // ① 土曜日・日曜日の除外
-    const dayOfWeek = d.getDay()
-    if (dayOfWeek === 0 || dayOfWeek === 6) return false
-
-    // ② 日本の祝日・振替休日の除外（敬老の日、秋分の日など）
-    if (getJapaneseHolidayName(cleanDate)) return false
-
-    // ③ 長期休業期間（夏休み・冬休み・春休み等）および基本設定の運休除外
-    if (checkSuspension(cleanDate).isSuspended) return false
-
-    // ④ 学校用時刻表（schoolTimetable）での運休・休校判定
-    const tRow = schoolTimetable.find(t => toSlashDate(t.date) === cleanDate)
-    if (tRow) {
-      const note = (tRow.note || (tRow as any)['備考'] || '').trim()
-      const label = (tRow.calendar_label || (tRow as any).calendar_display || (tRow as any)['カレンダー表示用'] || '').trim()
-      if (/運休|全校運休|休校|祝日|休み/.test(note) || /運休|全校運休|休校|祝日|休み/.test(label)) {
-        return false
-      }
-      // 登校便・下校便の時刻がすべて空欄・運休の場合も運行なしとしてスキップ
-      const m = formatTimeOnly(tRow.morning_trip || (tRow as any)['登校便'])
-      const t1 = formatTimeOnly(tRow.afternoon_trip_1 || (tRow as any).trip_1 || (tRow as any)['下校1便'])
-      const t2 = formatTimeOnly(tRow.afternoon_trip_2 || (tRow as any).trip_2 || (tRow as any)['下校2便'])
-      const t3 = formatTimeOnly(tRow.afternoon_trip_3 || (tRow as any).trip_3 || (tRow as any)['下校3便'])
-      if (!m && !t1 && !t2 && !t3) {
-        return false
-      }
-    }
-
-    // ⑤ 運行予定カレンダーデータ（schedules）等で学校全体の運休が設定されている日の除外
-    const daySchedules = schedules.filter(s => toSlashDate(s.date) === cleanDate)
-    const isSuspendedInSchedules = daySchedules.some(s => 
-      s.morning_status === '運休' || 
-      s.afternoon_status === '運休' ||
-      s.morning_status === '全校運休' || 
-      s.afternoon_status === '全校運休' ||
-      (s.note && /全校運休|学校運休|臨時休校/.test(s.note))
-    )
-    if (isSuspendedInSchedules) return false
-
-    return true
-  }, [schoolTimetable, basicSettings, schedules])
+  // 週間カレンダーで実際に表示する実運行登校日一覧（平日・登校日のみ）
+  const operatingWeekDays = useMemo(() => {
+    return weekDays.filter(day => isOperatingDayRow(day.dateStrSlash))
+  }, [weekDays, isOperatingDayRow])
 
   // 対象月（primaryYearMonth）の実運行日一覧（土日・祝日・基本運休・学校休校等を除外した登校日のみ）
   const targetMonthOperatingDays = useMemo(() => {
@@ -488,13 +426,13 @@ export const ParentDashboard: React.FC = () => {
 
     for (let day = 1; day <= lastDay; day++) {
       const dateSlash = `${primaryYearMonth}/${String(day).padStart(2, '0')}`
-      if (isOperatingDay(dateSlash)) {
+      if (isOperatingDayRow(dateSlash)) {
         operatingDays.push(dateSlash)
       }
     }
 
     return operatingDays
-  }, [primaryYearMonth, isOperatingDay])
+  }, [primaryYearMonth, isOperatingDayRow])
 
   // 対象月の実運行日すべてに予約が保存されているか（予約完了判定）
   const isAllReservedForMonth = useMemo(() => {
@@ -515,9 +453,7 @@ export const ParentDashboard: React.FC = () => {
 
   // 今週分モーダルのトリガー（祝日・運休日・土日を厳格にスキップ）
   const openWeekConfirmModal = () => {
-    const validDays = weekDays
-      .map(d => d.dateStrSlash)
-      .filter(d => isOperatingDay(d))
+    const validDays = operatingWeekDays.map(d => d.dateStrSlash)
 
     if (validDays.length === 0) {
       alert('対象週に運行予定の平日・登校日がありません（すべて祝日・運休・休校日です）')
@@ -558,8 +494,8 @@ export const ParentDashboard: React.FC = () => {
     if (!confirmModal || !user || !selectedStudent) return
     setIsBatchApplying(true)
     try {
-      // 二重防壁：isOperatingDay を通過した登校日のみに限定（祝日・運休・休校日を完全にスキップ）
-      const safeDates = confirmModal.targetDates.filter(d => isOperatingDay(d))
+      // 二重防壁：isOperatingDayRow を通過した登校日のみに限定（祝日・運休・休校日を完全にスキップ）
+      const safeDates = confirmModal.targetDates.filter(d => isOperatingDayRow(d))
       if (safeDates.length === 0) {
         alert('反映対象の運行日（平日・登校日）がありません（すべて祝日・運休・休校日です）')
         setConfirmModal(null)
@@ -1221,15 +1157,54 @@ export const ParentDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* 週間予約カード一覧（スマホ特化縦型カードリスト ＆ PC 5列グリッド） */}
-      <div className="flex flex-col md:grid md:grid-cols-5 gap-4">
-        {weekDays.map(day => {
-          const isToday = day.dateStrSlash === todayStrSlash
-          const suspension = checkSuspension(day.dateStrSlash)
-          const timetableRow = schoolTimetable.find(t => t.date === day.dateStrSlash)
-          const existing = schedules.find(s => s.date === day.dateStrSlash && s.student_name === selectedStudent)
-          const isDayPublished = isMonthPublished(day.dateStrSlash.slice(0, 7), basicSettings)
-          const holiday = getJapaneseHolidayName(day.dateStrSlash)
+      {/* 週間予約カード一覧（祝日・長期休業・運休日・土日は完全除外し、運行日のみを連続表示） */}
+      {operatingWeekDays.length === 0 ? (
+        <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-8 sm:p-12 text-center space-y-4 shadow-xl">
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-300 shadow-inner">
+            <Calendar className="h-8 w-8" />
+          </div>
+          <div className="space-y-1.5">
+            <h3 className="text-base sm:text-lg font-black text-white">
+              この週に運行予定の平日（登校日）はありません
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-400 max-w-md mx-auto leading-relaxed">
+              祝日・振替休日、長期休業期間（夏休み・冬休み・春休み等）、または学校全校運休日のため、予約が必要なバス運行はありません。
+            </p>
+          </div>
+          <div className="pt-2 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setWeekOffset(prev => prev - 1)}
+              className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-2xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 active:scale-95"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span>前週を確認</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekOffset(prev => prev + 1)}
+              className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 rounded-2xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5 active:scale-95"
+            >
+              <span>次週を確認</span>
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className={`flex flex-col md:grid gap-4 ${
+          operatingWeekDays.length === 1 ? 'md:grid-cols-1 max-w-md mx-auto w-full' :
+          operatingWeekDays.length === 2 ? 'md:grid-cols-2 max-w-2xl mx-auto w-full' :
+          operatingWeekDays.length === 3 ? 'md:grid-cols-3' :
+          operatingWeekDays.length === 4 ? 'md:grid-cols-4' :
+          'md:grid-cols-5'
+        }`}>
+          {operatingWeekDays.map(day => {
+            const isToday = day.dateStrSlash === todayStrSlash
+            const suspension = checkSuspensionRow(day.dateStrSlash)
+            const timetableRow = schoolTimetable.find(t => t.date === day.dateStrSlash)
+            const existing = schedules.find(s => s.date === day.dateStrSlash && s.student_name === selectedStudent)
+            const isDayPublished = isMonthPublished(day.dateStrSlash.slice(0, 7), basicSettings)
+            const holiday = getJapaneseHolidayName(day.dateStrSlash)
           
           // 学校用時刻表からの各便時刻
           const t1Time = formatTimeToHHmm(timetableRow?.afternoon_trip_1)
@@ -1518,6 +1493,7 @@ export const ParentDashboard: React.FC = () => {
           )
         })}
       </div>
+    )}
 
       {/* ② 一括予約反映 確認モーダル */}
       {confirmModal && confirmModal.isOpen && (
@@ -1558,6 +1534,32 @@ export const ParentDashboard: React.FC = () => {
                     平日 {confirmModal.targetCount} 日間
                   </span>
                 </div>
+
+                {/* 反映対象日一覧（祝日・運休日・土日を完全除外した運行登校日のみを表示） */}
+                <div className="pt-2 border-t border-slate-800/80 flex flex-col gap-1.5 text-slate-300">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 text-xs">一括反映される登校日（祝日・運休日除外済）:</span>
+                    <span className="text-[10px] text-emerald-400 font-mono font-bold">{confirmModal.targetDates.length}日分</span>
+                  </div>
+                  <div className="max-h-24 overflow-y-auto p-2 bg-slate-900/90 rounded-xl border border-slate-800/80 flex flex-wrap gap-1.5">
+                    {confirmModal.targetDates.map(dateStr => {
+                      const clean = toSlashDate(dateStr)
+                      const parts = clean.split('/')
+                      const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10))
+                      const dayName = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()]
+                      return (
+                        <span
+                          key={dateStr}
+                          className="px-2 py-0.5 bg-slate-950 border border-slate-800 text-slate-200 rounded-lg text-[11px] font-mono font-bold flex items-center gap-1 shrink-0"
+                        >
+                          <span className="text-amber-400">{clean.slice(5)}</span>
+                          <span className="text-slate-400 text-[10px]">({dayName})</span>
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+
                 <div className="pt-2 border-t border-slate-800/80 flex flex-col gap-1 text-slate-300">
                   <span className="text-slate-500 text-xs">反映する内容:</span>
                   <div className="font-bold text-xs space-y-1 bg-slate-900 p-2.5 rounded-xl border border-slate-800">

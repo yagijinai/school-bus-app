@@ -13,6 +13,7 @@ import {
 import type { SchoolTimetableRow, BasicSettingRow, ScheduleCalendarRow } from '../types/spreadsheet'
 import { formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
+import { checkSuspension as checkSuspensionUtil } from '../lib/suspensionUtils'
 
 interface SchoolTimetableModalProps {
   isOpen: boolean
@@ -79,29 +80,9 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
     return `${y}/${m}/${day}`
   }, [])
 
-  // 運休期間判定
+  // 運休期間判定（年非依存 MM/DD 自動補完対応）
   const checkSuspension = (dateSlash: string) => {
-    for (const b of basicSettings) {
-      const isSuspended = b.standard_operation === '運休' || b.content_time.includes('運休')
-      if (!isSuspended) continue
-      const start = b.start_date
-      const end = b.end_date
-      if (!start || !end) continue
-
-      if (start <= end) {
-        if (dateSlash >= start && dateSlash <= end) {
-          return { isSuspended: true, name: b.setting_name, note: b.note }
-        }
-      } else {
-        const dMD = dateSlash.slice(5)
-        const sMD = start.slice(5)
-        const eMD = end.slice(5)
-        if (dMD >= sMD || dMD <= eMD) {
-          return { isSuspended: true, name: b.setting_name, note: b.note }
-        }
-      }
-    }
-    return { isSuspended: false, name: '', note: '' }
+    return checkSuspensionUtil(dateSlash, basicSettings)
   }
 
   // 該当日付の便別時刻を安全に抽出（schoolTimetable と schedules の両方から網羅的にマージ）

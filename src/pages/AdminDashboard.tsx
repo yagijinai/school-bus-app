@@ -11,6 +11,7 @@ import {
 import type { BasicSettingRow, GuardianMasterRow, SchoolTimetableRow, BusStopRow, ScheduleCalendarRow } from '../types/spreadsheet'
 import { toSlashDate, toHyphenDate, formatTimeToHHmm, formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
+import { checkSuspension } from '../lib/suspensionUtils'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const AdminDashboard: React.FC = () => {
@@ -677,13 +678,15 @@ export const AdminDashboard: React.FC = () => {
     let baseCount = 0
     let skipHolidayCount = 0
     let skipWeekendCount = 0
+    let skipSuspensionCount = 0
 
     const previewList: {
       dateStr: string
       dayOfWeek: number
       dayNumber: number
       holidayName?: string
-      type: 'special' | 'base' | 'weekend' | 'holiday'
+      suspensionName?: string
+      type: 'special' | 'base' | 'weekend' | 'holiday' | 'suspension'
     }[] = []
 
     for (let d = 1; d <= daysInMonth; d++) {
@@ -693,6 +696,7 @@ export const AdminDashboard: React.FC = () => {
       const padD = String(d).padStart(2, '0')
       const dateStr = `${batchYear}/${padM}/${padD}`
       const hol = getJapaneseHolidayName(dateStr)
+      const suspension = checkSuspension(dateStr, basicSettings)
 
       if (dow === 0 || dow === 6) {
         skipWeekendCount++
@@ -700,6 +704,9 @@ export const AdminDashboard: React.FC = () => {
       } else if (hol) {
         skipHolidayCount++
         previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, holidayName: hol, type: 'holiday' })
+      } else if (suspension.isSuspended) {
+        skipSuspensionCount++
+        previewList.push({ dateStr, dayOfWeek: dow, dayNumber: d, suspensionName: suspension.name, type: 'suspension' })
       } else {
         totalWeekdays++
         if (hasSpecialPattern && specialDays.includes(dow)) {
@@ -719,9 +726,10 @@ export const AdminDashboard: React.FC = () => {
       baseCount,
       skipHolidayCount,
       skipWeekendCount,
+      skipSuspensionCount,
       previewList
     }
-  }, [batchYear, batchMonth, hasSpecialPattern, specialDays])
+  }, [batchYear, batchMonth, hasSpecialPattern, specialDays, basicSettings])
 
   // 一括設定の実行・保存
   const handleExecuteBatchTimetable = async () => {
@@ -1333,31 +1341,59 @@ export const AdminDashboard: React.FC = () => {
                           <span className="text-amber-400">{curEnd || '未設定'}</span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-1.5 pt-1">
+                        <div className="grid grid-cols-2 gap-2 pt-1">
                           <div>
-                            <span className="text-[9px] text-slate-500 block mb-0.5">開始日</span>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[10px] text-slate-400 font-bold">開始日 (MM/DD)</span>
+                              <span className="text-[9px] text-amber-400/80 font-mono">年非依存可</span>
+                            </div>
                             <input
-                              type="date"
-                              value={toHyphenDate(curStart)}
+                              type="text"
+                              value={curStart || ''}
+                              placeholder="例: 07/21"
                               onChange={(e) => {
+                                handleDraftChange(settingName, 'start_date', e.target.value)
+                              }}
+                              onBlur={(e) => {
                                 const slash = toSlashDate(e.target.value)
                                 handleDraftChange(settingName, 'start_date', slash)
                                 handleAutoSave(settingName, 'start_date', slash)
                               }}
-                              className="w-full bg-slate-900 border border-slate-800 hover:border-amber-500/60 rounded-lg px-2 py-1 text-[11px] text-amber-300 font-mono focus:outline-none transition-all cursor-pointer"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const slash = toSlashDate((e.target as HTMLInputElement).value)
+                                  handleDraftChange(settingName, 'start_date', slash)
+                                  handleAutoSave(settingName, 'start_date', slash)
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 hover:border-amber-500/60 focus:border-amber-400 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono font-bold focus:outline-none transition-all"
                             />
                           </div>
                           <div>
-                            <span className="text-[9px] text-slate-500 block mb-0.5">終了日</span>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[10px] text-slate-400 font-bold">終了日 (MM/DD)</span>
+                              <span className="text-[9px] text-amber-400/80 font-mono">年非依存可</span>
+                            </div>
                             <input
-                              type="date"
-                              value={toHyphenDate(curEnd)}
+                              type="text"
+                              value={curEnd || ''}
+                              placeholder="例: 08/31"
                               onChange={(e) => {
+                                handleDraftChange(settingName, 'end_date', e.target.value)
+                              }}
+                              onBlur={(e) => {
                                 const slash = toSlashDate(e.target.value)
                                 handleDraftChange(settingName, 'end_date', slash)
                                 handleAutoSave(settingName, 'end_date', slash)
                               }}
-                              className="w-full bg-slate-900 border border-slate-800 hover:border-amber-500/60 rounded-lg px-2 py-1 text-[11px] text-amber-300 font-mono focus:outline-none transition-all cursor-pointer"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const slash = toSlashDate((e.target as HTMLInputElement).value)
+                                  handleDraftChange(settingName, 'end_date', slash)
+                                  handleAutoSave(settingName, 'end_date', slash)
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-800 hover:border-amber-500/60 focus:border-amber-400 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono font-bold focus:outline-none transition-all"
                             />
                           </div>
                         </div>
@@ -1419,27 +1455,49 @@ export const AdminDashboard: React.FC = () => {
                         {/* 開始日 */}
                         <td className="py-3 px-3">
                           <input
-                            type="date"
-                            value={toHyphenDate(curStart)}
+                            type="text"
+                            value={curStart || ''}
+                            placeholder="例: 07/21"
                             onChange={(e) => {
+                              handleDraftChange(settingName, 'start_date', e.target.value)
+                            }}
+                            onBlur={(e) => {
                               const slash = toSlashDate(e.target.value)
                               handleDraftChange(settingName, 'start_date', slash)
                               handleAutoSave(settingName, 'start_date', slash)
                             }}
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-amber-300 font-mono text-xs focus:outline-none focus:border-amber-400 cursor-pointer w-full"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const slash = toSlashDate((e.target as HTMLInputElement).value)
+                                handleDraftChange(settingName, 'start_date', slash)
+                                handleAutoSave(settingName, 'start_date', slash)
+                              }
+                            }}
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-amber-300 font-mono text-xs focus:outline-none focus:border-amber-400 w-full"
                           />
                         </td>
                         {/* 終了日 */}
                         <td className="py-3 px-3">
                           <input
-                            type="date"
-                            value={toHyphenDate(curEnd)}
+                            type="text"
+                            value={curEnd || ''}
+                            placeholder="例: 08/31"
                             onChange={(e) => {
+                              handleDraftChange(settingName, 'end_date', e.target.value)
+                            }}
+                            onBlur={(e) => {
                               const slash = toSlashDate(e.target.value)
                               handleDraftChange(settingName, 'end_date', slash)
                               handleAutoSave(settingName, 'end_date', slash)
                             }}
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-amber-300 font-mono text-xs focus:outline-none focus:border-amber-400 cursor-pointer w-full"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                const slash = toSlashDate((e.target as HTMLInputElement).value)
+                                handleDraftChange(settingName, 'end_date', slash)
+                                handleAutoSave(settingName, 'end_date', slash)
+                              }
+                            }}
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-amber-300 font-mono text-xs focus:outline-none focus:border-amber-400 w-full"
                           />
                         </td>
                         {/* 標準運行 */}
@@ -2317,7 +2375,9 @@ export const AdminDashboard: React.FC = () => {
                   const note = (data?.note || '').trim()
 
                   const holidayName = getJapaneseHolidayName(day.dateStr)
+                  const suspension = checkSuspension(day.dateStr, basicSettings)
                   const isHoliday = !!holidayName
+                  const isSuspended = suspension.isSuspended
                   const isSun = day.dayOfWeek === 0
                   const isSat = day.dayOfWeek === 6
 
@@ -2332,6 +2392,8 @@ export const AdminDashboard: React.FC = () => {
                           ? 'bg-slate-900/90 border-amber-500/80 shadow-md shadow-amber-500/10 hover:border-amber-400'
                           : isHoliday || isSun
                           ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-500/60 hover:bg-rose-950/30'
+                          : isSuspended
+                          ? 'bg-amber-950/15 border-amber-800/40 hover:border-amber-500/60 hover:bg-amber-950/25'
                           : 'bg-slate-950/70 border-slate-800 hover:border-sky-500/60 hover:bg-slate-900/60'
                       }`}
                     >
@@ -2345,6 +2407,8 @@ export const AdminDashboard: React.FC = () => {
                               ? 'text-rose-400 font-black'
                               : isSat
                               ? 'text-sky-400'
+                              : isSuspended
+                              ? 'text-amber-400 font-bold'
                               : 'text-slate-300'
                           }`}
                         >
@@ -2360,9 +2424,18 @@ export const AdminDashboard: React.FC = () => {
                               🎌 {holidayName}
                             </span>
                           )}
+                          {isSuspended && (
+                            <span 
+                              className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold truncate max-w-full border border-amber-500/30 flex items-center gap-0.5"
+                              title={suspension.name || '運休期間'}
+                            >
+                              <Ban className="h-2.5 w-2.5 shrink-0 text-rose-400" />
+                              <span className="truncate">{suspension.name || '運休'}</span>
+                            </span>
+                          )}
                           {label && (
                             <span 
-                              className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold truncate max-w-full border border-amber-500/30"
+                              className="text-[9px] md:text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold truncate max-w-full border border-sky-500/30"
                               title={label}
                             >
                               {label}
@@ -2978,7 +3051,7 @@ export const AdminDashboard: React.FC = () => {
                 <span>生成サマリー ({batchYear}年{batchMonth}月)</span>
                 <span className="text-emerald-400 font-bold">合計 {batchPreviewSummary.totalWeekdays} 日分反映</span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-300 text-[11px]">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-slate-300 text-[11px]">
                 <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
                   <span className="text-slate-400 block">基本パターン:</span>
                   <span className="text-sky-300 font-bold text-sm">{batchPreviewSummary.baseCount} 日</span>
@@ -2992,12 +3065,16 @@ export const AdminDashboard: React.FC = () => {
                   <span className="text-rose-400 font-bold text-sm">{batchPreviewSummary.skipHolidayCount} 日</span>
                 </div>
                 <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
+                  <span className="text-slate-400 block">長期休業/運休:</span>
+                  <span className="text-amber-400 font-bold text-sm">{batchPreviewSummary.skipSuspensionCount} 日</span>
+                </div>
+                <div className="p-2 bg-slate-900 rounded-xl border border-slate-800">
                   <span className="text-slate-400 block">土日（除外）:</span>
                   <span className="text-slate-400 font-bold text-sm">{batchPreviewSummary.skipWeekendCount} 日</span>
                 </div>
               </div>
               <p className="text-[11px] text-slate-400 pt-1 leading-relaxed">
-                ※ 対象平日は一律上書き再生成されます。土曜日・日曜日・祝日は自動的に除外されるため、行事登校日など個別に設定されたデータは保護・維持されます。
+                ※ 対象平日は一律上書き再生成されます。土曜日・日曜日・祝日、および夏休み等の長期休業（運休期間）は自動的に除外されます。
               </p>
             </div>
 

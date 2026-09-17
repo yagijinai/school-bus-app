@@ -21,6 +21,8 @@ import { RoleSwitcher } from '../components/RoleSwitcher'
 import { SchoolTimetableModal } from '../components/SchoolTimetableModal'
 import { formatTimeToHHmm, extractBoardingTime, isMonthPublished } from '../lib/spreadsheetApi'
 import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
+import { checkSuspension } from '../lib/suspensionUtils'
+import type { BasicSettingRow } from '../types/spreadsheet'
 
 // 生徒名の文字長に応じた動的フォントサイズ（1行収容用）
 const getStudentNameFontSize = (name: string): string => {
@@ -99,16 +101,17 @@ export const DriverDashboard: React.FC = () => {
     return getJapaneseHolidayName(selectedDate)
   }, [selectedDate])
 
-  // 運休判定
+  // 運休判定（MM/DD年非依存自動補完対応）
   const holidayInfo = useMemo(() => {
     const target = selectedDate.replace(/-/g, '/')
-    for (const b of basicSettings) {
-      if (!b.start_date || !b.end_date) continue
-      const s = b.start_date.replace(/-/g, '/')
-      const e = b.end_date.replace(/-/g, '/')
-      if (target >= s && target <= e) {
-        return b
-      }
+    const res = checkSuspension(target, basicSettings)
+    if (res.isSuspended) {
+      return {
+        setting_name: res.name,
+        standard_operation: '運休',
+        content_time: res.note,
+        note: res.note
+      } as BasicSettingRow
     }
     return null
   }, [selectedDate, basicSettings])

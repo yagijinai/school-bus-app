@@ -147,7 +147,7 @@ function createJsonResponse(data) {
 }
 
 /**
- * 日付文字列を確実に YYYY/MM/DD 形式に変換
+ * 日付文字列を確実に YYYY/MM/DD または MM/DD 形式に変換
  */
 function formatDateToSlash(val) {
   if (!val) return '';
@@ -157,13 +157,18 @@ function formatDateToSlash(val) {
     const d = ('0' + val.getDate()).slice(-2);
     return y + '/' + m + '/' + d;
   }
-  const str = String(val).trim().replace(/-/g, '/');
+  let str = String(val).trim().replace(/^'+/, '').replace(/-/g, '/');
   const parts = str.split('/');
   if (parts.length === 3) {
     const y = parts[0];
     const m = ('0' + parts[1]).slice(-2);
     const d = ('0' + parts[2]).slice(-2);
     return y + '/' + m + '/' + d;
+  }
+  if (parts.length === 2) {
+    const m = ('0' + parts[0]).slice(-2);
+    const d = ('0' + parts[1]).slice(-2);
+    return m + '/' + d;
   }
   return str;
 }
@@ -1312,6 +1317,10 @@ function saveBasicSettingToSheet(params) {
   const contentTime = String(params.content_time || params.contentTime || params['内容・時刻'] || '').trim();
   const note = String(params.note || params['備考'] || '').trim();
 
+  // MM/DD 形式（年なし）の場合はスプレッドシートが勝手に今年日付へ自動変換するのを防ぐため、文字列として格納
+  const writeStart = startDate.split('/').length === 2 ? "'" + startDate : startDate;
+  const writeEnd = endDate.split('/').length === 2 ? "'" + endDate : endDate;
+
   const lastRow = sheet.getLastRow();
   let targetRow = -1;
 
@@ -1328,8 +1337,8 @@ function saveBasicSettingToSheet(params) {
   if (targetRow > 0) {
     // B列〜F列（列2〜6）の5項目を上書き更新
     sheet.getRange(targetRow, 2, 1, 5).setValues([[
-      startDate,
-      endDate,
+      writeStart,
+      writeEnd,
       standardOperation,
       contentTime,
       note
@@ -1344,7 +1353,7 @@ function saveBasicSettingToSheet(params) {
     };
   } else {
     // 存在しない場合は新規追加
-    sheet.appendRow([settingName, startDate, endDate, standardOperation, contentTime, note]);
+    sheet.appendRow([settingName, writeStart, writeEnd, standardOperation, contentTime, note]);
     SpreadsheetApp.flush();
     return {
       status: 'success',

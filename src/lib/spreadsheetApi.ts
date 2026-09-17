@@ -37,11 +37,16 @@ export function toSlashDate(val: any): string {
     const d = parts[2].padStart(2, '0')
     return `${y}/${m}/${d}`
   }
+  if (parts.length === 2) {
+    const m = parts[0].padStart(2, '0')
+    const d = parts[1].padStart(2, '0')
+    return `${m}/${d}`
+  }
   return str
 }
 
 /**
- * 日付文字列を YYYY-MM-DD 形式（input[type=date]用）に変換
+ * 日付文字列を YYYY-MM-DD または MM-DD 形式（input[type=date]またはinput[type=text]用）に変換
  */
 export function toHyphenDate(val: string): string {
   if (!val) return ''
