@@ -101,12 +101,25 @@ export const AdminDashboard: React.FC = () => {
     return map
   }, [guardianMaster])
 
+  // 現在マスターに存在する有効な全生徒名セット（削除された生徒を座席集計や運行予定から即時除外するため）
+  const validStudentNames = useMemo(() => {
+    const set = new Set<string>()
+    guardianMaster.forEach(g => {
+      g.student_names.forEach(name => {
+        if (name && name.trim()) set.add(name.trim())
+      })
+    })
+    return set
+  }, [guardianMaster])
+
   // 日付で絞り込まれた運行予定（集計カードの計算母体）
+  // ※削除された生徒は座席集計から即座に除外される
   const dateFilteredSchedules = useMemo(() => {
-    if (isAllDates) return schedules
+    const validSchedules = schedules.filter(s => validStudentNames.has(s.student_name))
+    if (isAllDates) return validSchedules
     const target = selectedDate.replace(/-/g, '/')
-    return schedules.filter(s => s.date.replace(/-/g, '/') === target)
-  }, [schedules, isAllDates, selectedDate])
+    return validSchedules.filter(s => s.date.replace(/-/g, '/') === target)
+  }, [schedules, isAllDates, selectedDate, validStudentNames])
 
   // リアルタイム集計（日付内の各便人数）
   const summaryCounts = useMemo(() => {
@@ -333,8 +346,8 @@ export const AdminDashboard: React.FC = () => {
     }
   }
 
-  // 卒業（繰り上げ）処理（長男B列が卒業すると、C列→B列、D列→C列、E列→D列へ1列ずつ左へ繰り上がり、末尾が空欄）
-  const handleGraduateStudent = async (g: GuardianMasterRow, rowKey: string, targetColIndex: 1 | 2 | 3 | 4) => {
+  // 生徒個別の削除処理（各生徒名入力ボックス横の「✕」ボタン押下時）
+  const handleDeleteStudent = async (g: GuardianMasterRow, rowKey: string, targetColIndex: 1 | 2 | 3 | 4) => {
     const draft = guardianDrafts[rowKey] || {}
     let s1 = draft.student_name_1 !== undefined ? draft.student_name_1 : (g.student_name_1 || g.student_names[0] || '')
     let s2 = draft.student_name_2 !== undefined ? draft.student_name_2 : (g.student_name_2 || g.student_names[1] || '')
@@ -344,24 +357,28 @@ export const AdminDashboard: React.FC = () => {
     const targetName = targetColIndex === 1 ? s1 : targetColIndex === 2 ? s2 : targetColIndex === 3 ? s3 : s4
     if (!targetName) return
 
-    const colLabel = targetColIndex === 1 ? '第1子' : targetColIndex === 2 ? '第2子' : targetColIndex === 3 ? '第3子' : '第4子'
-    if (!window.confirm(`「${targetName}」さん（${colLabel}）を卒業（繰り上げ）処理しますか？\n\n※後続の兄弟・姉妹が1列ずつ左へ繰り上がり、末尾が空欄になります。\n※スプレッドシートにも即座に自動反映されます。`)) {
+    if (!window.confirm(`「${targetName}」をマスターから削除しますか？`)) {
       return
     }
 
     if (targetColIndex === 1) {
-      s1 = s2
-      s2 = s3
-      s3 = s4
-      s4 = ''
+      // 第1子（B列）削除時：後ろ（C列以降）に兄弟がいる場合は自動で左詰め（繰り上げ）
+      if (s2 || s3 || s4) {
+        s1 = s2
+        s2 = s3
+        s3 = s4
+        s4 = ''
+      } else {
+        s1 = ''
+      }
     } else if (targetColIndex === 2) {
-      s2 = s3
-      s3 = s4
-      s4 = ''
+      // 第2子（C列）削除時：C列を空欄にする（要件：A-2の個別削除を実行し、A-2のみが消去されてスプレッドシートC列が空欄になること）
+      s2 = ''
     } else if (targetColIndex === 3) {
-      s3 = s4
-      s4 = ''
+      // 第3子（D列）削除時：D列を空欄にする
+      s3 = ''
     } else if (targetColIndex === 4) {
+      // 第4子（E列）削除時：E列を空欄にする
       s4 = ''
     }
 
@@ -398,9 +415,15 @@ export const AdminDashboard: React.FC = () => {
 
       if (res.success || (res as any).status === 'success') {
         setSavedGuardianKey(rowKey)
-        setTimeout(() => setSavedGuardianKey(null), 2500)
+        setSuccessToast({
+          message: `「${targetName}」を削除しました`
+        })
+        setTimeout(() => {
+          setSavedGuardianKey(null)
+          setSuccessToast(null)
+        }, 3000)
       } else {
-        alert(`卒業繰り上げ保存に失敗しました: ${res.message}`)
+        alert(`個別削除の保存に失敗しました: ${res.message}`)
       }
     } finally {
       setSavingGuardianKey(null)
@@ -427,15 +450,10 @@ export const AdminDashboard: React.FC = () => {
     setTimeout(() => setCopiedCode(null), 2000)
   }
 
-  // 生徒・保護者マスターの行削除処理
+  // 生徒・保護者マスターの世帯行削除処理
   const [deletingGuardianKey, setDeletingGuardianKey] = useState<string | null>(null)
   const handleDeleteGuardianRow = async (g: GuardianMasterRow, idx: number) => {
-    const studentNames = g.student_names.join('・')
-    const displayName = studentNames 
-      ? `${studentNames}さん` 
-      : (g.parent_email || (g.auth_code ? `コード: ${g.auth_code}` : `行 #${idx + 1}`))
-
-    if (!window.confirm(`「${displayName}」のデータを削除してもよろしいですか？\n※スプレッドシート上の該当行が削除されます。`)) {
+    if (!window.confirm(`この世帯（保護者・生徒全員・認証コード）を完全に削除しますか？この操作は取り消せません。`)) {
       return
     }
 
@@ -451,7 +469,7 @@ export const AdminDashboard: React.FC = () => {
       const isSuccess = res.success || res.status === 'success'
       if (isSuccess) {
         setSuccessToast({
-          message: `「${displayName}」のデータを削除しました`
+          message: `世帯データを完全に削除しました`
         })
         setTimeout(() => {
           setSuccessToast(null)
@@ -1881,7 +1899,7 @@ export const AdminDashboard: React.FC = () => {
                   <th className="py-3 px-3 min-w-[120px]">備考 (G列)</th>
                   <th className="py-3 px-3 min-w-[120px] text-center">認証コード (J列)</th>
                   <th className="py-3 px-3 w-20 text-center">保存状況</th>
-                  <th className="py-3 px-3 w-14 text-center">削除</th>
+                  <th className="py-3 px-3 min-w-[100px] text-center">世帯操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-medium">
@@ -1913,7 +1931,7 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </td>
 
-                      {/* B列: 第1子氏名（インライン編集＆卒業繰り上げ） */}
+                      {/* B列: 第1子氏名（インライン編集＆個別削除） */}
                       <td className="py-3 px-2">
                         <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">👦</span>
@@ -1928,17 +1946,17 @@ export const AdminDashboard: React.FC = () => {
                           {s1 && (
                             <button
                               type="button"
-                              title="第1子を卒業（繰り上げ）：第2子以降が1列ずつ左へ繰り上がります"
-                              onClick={() => handleGraduateStudent(g, rowKey, 1)}
-                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                              title={`第1子「${s1}」をマスターから削除`}
+                              onClick={() => handleDeleteStudent(g, rowKey, 1)}
+                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              卒業
+                              <X className="h-3.5 w-3.5" />
                             </button>
                           )}
                         </div>
                       </td>
 
-                      {/* C列: 第2子氏名（インライン編集＆卒業繰り上げ） */}
+                      {/* C列: 第2子氏名（インライン編集＆個別削除） */}
                       <td className="py-3 px-2">
                         <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">👧</span>
@@ -1953,17 +1971,17 @@ export const AdminDashboard: React.FC = () => {
                           {s2 && (
                             <button
                               type="button"
-                              title="第2子を卒業（繰り上げ）：第3子以降が1列ずつ左へ繰り上がります"
-                              onClick={() => handleGraduateStudent(g, rowKey, 2)}
-                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                              title={`第2子「${s2}」をマスターから削除`}
+                              onClick={() => handleDeleteStudent(g, rowKey, 2)}
+                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              卒業
+                              <X className="h-3.5 w-3.5" />
                             </button>
                           )}
                         </div>
                       </td>
 
-                      {/* D列: 第3子氏名（インライン編集＆卒業繰り上げ） */}
+                      {/* D列: 第3子氏名（インライン編集＆個別削除） */}
                       <td className="py-3 px-2">
                         <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">🧒</span>
@@ -1978,17 +1996,17 @@ export const AdminDashboard: React.FC = () => {
                           {s3 && (
                             <button
                               type="button"
-                              title="第3子を卒業（繰り上げ）：第4子が左へ繰り上がります"
-                              onClick={() => handleGraduateStudent(g, rowKey, 3)}
-                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                              title={`第3子「${s3}」をマスターから削除`}
+                              onClick={() => handleDeleteStudent(g, rowKey, 3)}
+                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              卒業
+                              <X className="h-3.5 w-3.5" />
                             </button>
                           )}
                         </div>
                       </td>
 
-                      {/* E列: 第4子氏名（インライン編集＆卒業繰り上げ） */}
+                      {/* E列: 第4子氏名（インライン編集＆個別削除） */}
                       <td className="py-3 px-2">
                         <div className="flex items-center gap-1">
                           <span className="text-sm shrink-0">👶</span>
@@ -2003,11 +2021,11 @@ export const AdminDashboard: React.FC = () => {
                           {s4 && (
                             <button
                               type="button"
-                              title="第4子を卒業"
-                              onClick={() => handleGraduateStudent(g, rowKey, 4)}
-                              className="px-1.5 py-1 bg-slate-800 hover:bg-rose-600/80 text-slate-300 hover:text-white rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer whitespace-nowrap"
+                              title={`第4子「${s4}」をマスターから削除`}
+                              onClick={() => handleDeleteStudent(g, rowKey, 4)}
+                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              卒業
+                              <X className="h-3.5 w-3.5" />
                             </button>
                           )}
                         </div>
@@ -2083,20 +2101,21 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </td>
 
-                      {/* 操作（行削除ボタン） */}
+                      {/* 操作（世帯削除ボタン） */}
                       <td className="py-3 px-3 text-center">
                         <button
                           type="button"
                           onClick={() => handleDeleteGuardianRow(g, idx)}
                           disabled={isDeletingThisRow}
-                          className="p-1.5 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-xl transition-all border border-transparent hover:border-rose-500/30 disabled:opacity-40 cursor-pointer"
-                          title="この世帯の生徒・保護者データを削除"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-xl transition-all border border-rose-500/20 hover:border-rose-500 disabled:opacity-40 cursor-pointer text-xs font-bold whitespace-nowrap shadow-sm"
+                          title="この世帯（保護者・生徒全員・認証コード）を完全に削除"
                         >
                           {isDeletingThisRow ? (
                             <RefreshCw className="h-3.5 w-3.5 animate-spin text-rose-400" />
                           ) : (
                             <Trash2 className="h-3.5 w-3.5" />
                           )}
+                          <span>世帯削除</span>
                         </button>
                       </td>
                     </tr>

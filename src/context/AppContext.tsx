@@ -988,7 +988,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 student_name_2: s2,
                 student_name_3: s3,
                 student_name_4: s4,
-                student_names: studentNames.length > 0 ? studentNames : g.student_names,
+                student_names: studentNames,
                 bus_stop_name: payload.bus_stop_name || g.bus_stop_name,
                 note: payload.note !== undefined ? payload.note : g.note,
                 default_morning: payload.default_morning !== undefined ? payload.default_morning : g.default_morning,
@@ -999,6 +999,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })
           return { ...prev, guardianMaster: updated }
         })
+
+        // ログイン中の保護者が編集された世帯である場合、セッションの生徒リストも追従更新
+        if (user && user.role === '保護者') {
+          const userEmail = (user.email || '').toLowerCase()
+          const targetEmail = (payload.parent_email || '').trim().toLowerCase()
+          const targetAuthCode = (payload.auth_code || '').trim().toUpperCase()
+          const isTargetUser = (targetEmail && userEmail === targetEmail) || (targetAuthCode && user.authCode === targetAuthCode)
+          if (isTargetUser) {
+            const s1 = payload.student_name_1 !== undefined ? payload.student_name_1 : (user.studentNames?.[0] || '')
+            const s2 = payload.student_name_2 !== undefined ? payload.student_name_2 : (user.studentNames?.[1] || '')
+            const s3 = payload.student_name_3 !== undefined ? payload.student_name_3 : (user.studentNames?.[2] || '')
+            const s4 = payload.student_name_4 !== undefined ? payload.student_name_4 : (user.studentNames?.[3] || '')
+            const updatedNames = [s1, s2, s3, s4].filter(Boolean) as string[]
+            if (updatedNames.length === 0) {
+              logout()
+            } else {
+              const currentStudentName = user.studentName || ''
+              const updatedUser = {
+                ...user,
+                studentName: currentStudentName && updatedNames.includes(currentStudentName) ? currentStudentName : updatedNames[0],
+                studentNames: updatedNames
+              }
+              setUser(updatedUser)
+              localStorage.setItem('school_bus_user', JSON.stringify(updatedUser))
+            }
+          }
+        }
+
         await refreshAll()
       }
       return res
@@ -1235,6 +1263,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }) => {
     setSyncing(true)
     try {
+      // 削除対象世帯の生徒名リストを特定
+      const targetGuardian = data.guardianMaster.find(g => {
+        if (payload.parent_email && g.parent_email && g.parent_email.toLowerCase() === payload.parent_email.toLowerCase()) return true
+        if (payload.auth_code && g.auth_code && g.auth_code.trim().toUpperCase() === payload.auth_code.trim().toUpperCase()) return true
+        if (payload.student_name && g.student_names.includes(payload.student_name)) return true
+        return false
+      })
+      const deletedStudents = targetGuardian ? targetGuardian.student_names : (payload.student_name ? [payload.student_name] : [])
+
       const res = await deleteGuardianMasterFromSheet(payload)
       const isSuccess = res.success || res.status === 'success'
       if (isSuccess) {
@@ -1245,15 +1282,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (payload.parent_email && g.parent_email && g.parent_email.toLowerCase() === payload.parent_email.toLowerCase()) {
               return false
             }
-            if (payload.auth_code && g.auth_code && g.auth_code === payload.auth_code) {
+            if (payload.auth_code && g.auth_code && g.auth_code.trim().toUpperCase() === payload.auth_code.trim().toUpperCase()) {
               return false
             }
             if (!g.parent_email && !g.auth_code && payload.student_name && g.student_names.includes(payload.student_name)) {
               return false
             }
             return true
-          })
+          }),
+          // schedules からも削除された生徒の予約レコードを即座に除外
+          schedules: prev.schedules.filter(s => !deletedStudents.includes(s.student_name))
         }))
+
+        // もしログイン中の保護者世帯が削除された場合、セッションを即時ログアウト
+        if (user && user.role === '保護者') {
+          const userEmail = (user.email || '').toLowerCase()
+          const isCurrentParentDeleted = (payload.parent_email && userEmail === payload.parent_email.toLowerCase()) ||
+            (deletedStudents.includes(user.studentName || ''))
+          if (isCurrentParentDeleted) {
+            logout()
+          }
+        }
+
         await refreshAll()
       }
       return res
