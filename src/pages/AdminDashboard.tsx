@@ -1087,7 +1087,7 @@ export const AdminDashboard: React.FC = () => {
 
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6 space-y-6 max-w-7xl mx-auto relative">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 lg:p-8 space-y-6 max-w-[1600px] w-full mx-auto relative">
       {/* 成功トースト通知（画面上部固定・コードコピー機能付き） */}
       {successToast && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92%] animate-in fade-in slide-in-from-top-4 duration-300">
@@ -1135,35 +1135,40 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* 上部ヘッダー（上下2段分離：上段=タイトル＆ユーザー情報、下段=操作ボタングループ） */}
-      <header className="flex flex-col gap-3.5 bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-xl">
-        {/* 上段: タイトル ＋ ログインユーザー情報 */}
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 sm:p-3 bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white rounded-2xl shadow-md shrink-0">
-            <Bus className="h-5 w-5 sm:h-6 sm:w-6" />
+      {/* 上部ヘッダー（PCデスクトップ最適化・左右水平展開） */}
+      <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-3xl p-4 sm:p-6 shadow-xl">
+        {/* 左側: スクールバス運行管理（ADMIN CONSOLE）＋ ログイン教頭情報 */}
+        <div className="flex items-center gap-3.5 min-w-0">
+          <div className="p-3 bg-gradient-to-tr from-indigo-500 to-indigo-600 text-white rounded-2xl shadow-lg shadow-indigo-500/20 shrink-0">
+            <Bus className="h-6 w-6" />
           </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="text-base sm:text-lg font-black text-white truncate">
-              管理者コンソール
-            </h1>
-            <p className="text-xs text-slate-400 truncate">
-              ログイン: {user?.email}（{user?.name}）
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h1 className="text-lg sm:text-xl font-black text-white tracking-wide">
+                スクールバス運行管理
+              </h1>
+              <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-mono text-[11px] font-bold border border-indigo-500/30 shrink-0">
+                ADMIN CONSOLE
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 truncate mt-1">
+              ログイン: <span className="text-slate-200 font-bold">{user?.email}</span>（{user?.name}）
             </p>
           </div>
         </div>
 
-        {/* 下段: 操作ボタングループ（水平配置・横書き最適化） */}
-        <div className="flex flex-wrap items-center gap-2 pt-2.5 border-t border-slate-800/80">
+        {/* 右側: 操作ボタングループ（ゆったり横並び配置） */}
+        <div className="flex flex-wrap items-center gap-2.5 pt-2.5 md:pt-0 border-t md:border-t-0 border-slate-800/80 shrink-0">
           <RoleSwitcher />
           <button
             type="button"
             onClick={() => refreshAll()}
             disabled={syncing}
-            className="px-3.5 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-amber-400 hover:text-amber-300 transition-all text-xs font-bold flex items-center gap-1.5 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
+            className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-amber-400 hover:text-amber-300 transition-all text-xs font-bold flex items-center gap-2 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
             title="スプレッドシートの生データを再取得"
           >
             <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin' : ''}`} />
-            <span>{syncing ? 'データ再同期中...' : 'データ再同期'}</span>
+            <span>{syncing ? 'データ再同期中...' : 'GASから最新データを再同期'}</span>
           </button>
           <button
             type="button"
@@ -1171,7 +1176,7 @@ export const AdminDashboard: React.FC = () => {
               logout()
               navigate('/login')
             }}
-            className="px-3.5 py-2 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-400 hover:text-rose-400 transition-all text-xs font-bold flex items-center gap-1.5 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
+            className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-400 hover:text-rose-400 transition-all text-xs font-bold flex items-center gap-2 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
             title="ログアウト"
           >
             <LogOut className="h-4 w-4 shrink-0" />
@@ -1882,7 +1887,7 @@ export const AdminDashboard: React.FC = () => {
               className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs rounded-2xl flex items-center gap-2 transition-all shadow-lg shadow-indigo-600/20 self-start sm:self-auto shrink-0"
             >
               <Plus className="h-4 w-4" />
-              ＋ 新入生・新規生徒を登録
+              新入生・新規生徒を登録
             </button>
           </div>
 
@@ -1890,16 +1895,15 @@ export const AdminDashboard: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-950/80 text-slate-400 border-b border-slate-800 font-bold uppercase tracking-wider text-[11px]">
                 <tr>
-                  <th className="py-3 px-3 min-w-[150px]">保護者連絡先 (A列)</th>
-                  <th className="py-3 px-2 min-w-[130px]">第1子氏名 (B列)</th>
-                  <th className="py-3 px-2 min-w-[130px]">第2子氏名 (C列)</th>
-                  <th className="py-3 px-2 min-w-[130px]">第3子氏名 (D列)</th>
-                  <th className="py-3 px-2 min-w-[130px]">第4子氏名 (E列)</th>
-                  <th className="py-3 px-3 min-w-[140px]">登録バス停名 (F列)</th>
-                  <th className="py-3 px-3 min-w-[120px]">備考 (G列)</th>
-                  <th className="py-3 px-3 min-w-[120px] text-center">認証コード (J列)</th>
-                  <th className="py-3 px-3 w-20 text-center">保存状況</th>
-                  <th className="py-3 px-3 min-w-[100px] text-center">世帯操作</th>
+                  <th className="py-3 px-3 min-w-[150px] w-[18%]">保護者連絡先 (A列)</th>
+                  <th className="py-3 px-1.5 min-w-[105px] w-[10.5%]">第1子氏名 (B列)</th>
+                  <th className="py-3 px-1.5 min-w-[105px] w-[10.5%]">第2子氏名 (C列)</th>
+                  <th className="py-3 px-1.5 min-w-[105px] w-[10.5%]">第3子氏名 (D列)</th>
+                  <th className="py-3 px-1.5 min-w-[105px] w-[10.5%]">第4子氏名 (E列)</th>
+                  <th className="py-3 px-2 min-w-[125px] w-[12%]">登録バス停 (F列)</th>
+                  <th className="py-3 px-2 min-w-[105px] w-[11%]">備考 (G列)</th>
+                  <th className="py-3 px-2 min-w-[100px] w-[9.5%] text-center">認証コード (J列)</th>
+                  <th className="py-3 px-2 w-28 min-w-[105px] text-center">世帯操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-medium">
@@ -1920,119 +1924,136 @@ export const AdminDashboard: React.FC = () => {
 
                   return (
                     <tr key={rowKey} className="hover:bg-slate-800/40 transition-colors">
-                      {/* A列: 保護者連絡先（メールまたは氏名） */}
-                      <td className="py-3 px-3 font-mono text-xs">
-                        {email ? (
-                          <span className="font-bold text-slate-300">{email}</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[11px]">
-                            未連携
-                          </span>
-                        )}
+                      {/* A列: 保護者連絡先（メールまたは氏名） ＆ 保存状況インジケーター */}
+                      <td className="py-2.5 px-3 font-mono text-xs">
+                        <div className="flex flex-col gap-0.5">
+                          {email ? (
+                            <span className="font-bold text-slate-300 truncate max-w-[200px]" title={email}>
+                              {email}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-[10px] w-fit">
+                              未連携
+                            </span>
+                          )}
+                          <div className="h-4 flex items-center">
+                            {isSaving ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 whitespace-nowrap animate-pulse">
+                                <RefreshCw className="h-2.5 w-2.5 animate-spin" /> 保存中...
+                              </span>
+                            ) : isSaved ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 whitespace-nowrap">
+                                <Check className="h-2.5 w-2.5" /> 保存済
+                              </span>
+                            ) : (
+                              <span className="text-[9px] text-slate-600 font-mono">自動保存</span>
+                            )}
+                          </div>
+                        </div>
                       </td>
 
                       {/* B列: 第1子氏名（インライン編集＆個別削除） */}
-                      <td className="py-3 px-2">
+                      <td className="py-2.5 px-1.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-sm shrink-0">👦</span>
+                          <span className="text-xs shrink-0 select-none">👦</span>
                           <input
                             type="text"
                             value={s1}
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_1', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_1', e.target.value)}
                             placeholder="第1子氏名"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-white font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px]"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-white font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-0"
                           />
                           {s1 && (
                             <button
                               type="button"
                               title={`第1子「${s1}」をマスターから削除`}
                               onClick={() => handleDeleteStudent(g, rowKey, 1)}
-                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
+                              className="p-1 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-md text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              <X className="h-3.5 w-3.5" />
+                              <X className="h-3 w-3" />
                             </button>
                           )}
                         </div>
                       </td>
 
                       {/* C列: 第2子氏名（インライン編集＆個別削除） */}
-                      <td className="py-3 px-2">
+                      <td className="py-2.5 px-1.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-sm shrink-0">👧</span>
+                          <span className="text-xs shrink-0 select-none">👧</span>
                           <input
                             type="text"
                             value={s2}
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_2', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_2', e.target.value)}
                             placeholder="第2子（任意）"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-0 placeholder:text-slate-600 placeholder:font-normal"
                           />
                           {s2 && (
                             <button
                               type="button"
                               title={`第2子「${s2}」をマスターから削除`}
                               onClick={() => handleDeleteStudent(g, rowKey, 2)}
-                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
+                              className="p-1 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-md text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              <X className="h-3.5 w-3.5" />
+                              <X className="h-3 w-3" />
                             </button>
                           )}
                         </div>
                       </td>
 
                       {/* D列: 第3子氏名（インライン編集＆個別削除） */}
-                      <td className="py-3 px-2">
+                      <td className="py-2.5 px-1.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-sm shrink-0">🧒</span>
+                          <span className="text-xs shrink-0 select-none">🧒</span>
                           <input
                             type="text"
                             value={s3}
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_3', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_3', e.target.value)}
                             placeholder="第3子（任意）"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-0 placeholder:text-slate-600 placeholder:font-normal"
                           />
                           {s3 && (
                             <button
                               type="button"
                               title={`第3子「${s3}」をマスターから削除`}
                               onClick={() => handleDeleteStudent(g, rowKey, 3)}
-                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
+                              className="p-1 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-md text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              <X className="h-3.5 w-3.5" />
+                              <X className="h-3 w-3" />
                             </button>
                           )}
                         </div>
                       </td>
 
                       {/* E列: 第4子氏名（インライン編集＆個別削除） */}
-                      <td className="py-3 px-2">
+                      <td className="py-2.5 px-1.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-sm shrink-0">👶</span>
+                          <span className="text-xs shrink-0 select-none">👶</span>
                           <input
                             type="text"
                             value={s4}
                             onChange={(e) => handleGuardianDraftChange(rowKey, 'student_name_4', e.target.value)}
                             onBlur={(e) => handleSaveGuardian(g, rowKey, 'student_name_4', e.target.value)}
                             placeholder="第4子（任意）"
-                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-[75px] placeholder:text-slate-600 placeholder:font-normal"
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-200 font-bold text-xs focus:outline-none focus:border-indigo-400 w-full min-w-0 placeholder:text-slate-600 placeholder:font-normal"
                           />
                           {s4 && (
                             <button
                               type="button"
                               title={`第4子「${s4}」をマスターから削除`}
                               onClick={() => handleDeleteStudent(g, rowKey, 4)}
-                              className="p-1.5 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
+                              className="p-1 bg-slate-800/80 hover:bg-rose-600 text-slate-400 hover:text-white rounded-md text-xs font-bold shrink-0 transition-colors cursor-pointer flex items-center justify-center shadow-sm"
                             >
-                              <X className="h-3.5 w-3.5" />
+                              <X className="h-3 w-3" />
                             </button>
                           )}
                         </div>
                       </td>
 
                       {/* 登録バス停名（F列・バス停マスタのプルダウン） */}
-                      <td className="py-3 px-3">
+                      <td className="py-2.5 px-2">
                         <select
                           value={curBusStop}
                           onChange={(e) => {
@@ -2040,7 +2061,7 @@ export const AdminDashboard: React.FC = () => {
                             handleGuardianDraftChange(rowKey, 'bus_stop_name', val)
                             handleSaveGuardian(g, rowKey, 'bus_stop_name', val)
                           }}
-                          className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-amber-300 font-bold text-xs focus:outline-none focus:border-amber-400 cursor-pointer w-full min-w-[130px]"
+                          className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-amber-300 font-bold text-xs focus:outline-none focus:border-amber-400 cursor-pointer w-full min-w-0"
                         >
                           <option value="">未選択</option>
                           {busStops.map(b => (
@@ -2050,21 +2071,21 @@ export const AdminDashboard: React.FC = () => {
                       </td>
 
                       {/* 備考（G列・onBlurで保存） */}
-                      <td className="py-3 px-3">
+                      <td className="py-2.5 px-2">
                         <input
                           type="text"
                           value={curNote}
                           onChange={(e) => handleGuardianDraftChange(rowKey, 'note', e.target.value)}
                           onBlur={(e) => handleSaveGuardian(g, rowKey, 'note', e.target.value)}
                           placeholder="備考入力"
-                          className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-slate-300 text-xs focus:outline-none focus:border-amber-400 w-full min-w-[100px]"
+                          className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-slate-300 text-xs focus:outline-none focus:border-amber-400 w-full min-w-0 placeholder:text-slate-600"
                         />
                       </td>
 
                       {/* 認証コード (J列 ＆ ワンタップコピー機能) */}
-                      <td className="py-3 px-3 text-center">
+                      <td className="py-2.5 px-2 text-center">
                         {g.auth_code ? (
-                          <div className="inline-flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 shadow-sm">
+                          <div className="inline-flex items-center gap-1 bg-slate-950 px-2 py-1 rounded-xl border border-slate-800 shadow-sm">
                             <span className="font-mono font-black text-amber-300 text-xs tracking-wide">
                               {g.auth_code}
                             </span>
@@ -2086,28 +2107,13 @@ export const AdminDashboard: React.FC = () => {
                         )}
                       </td>
 
-                      {/* 保存状況 */}
-                      <td className="py-3 px-3 text-center">
-                        {isSaving ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-400 whitespace-nowrap">
-                            <RefreshCw className="h-3 w-3 animate-spin" /> 保存中
-                          </span>
-                        ) : isSaved ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 whitespace-nowrap">
-                            <Check className="h-3 w-3" /> 保存済
-                          </span>
-                        ) : (
-                          <span className="text-[10px] text-slate-600 font-mono whitespace-nowrap">自動同期</span>
-                        )}
-                      </td>
-
                       {/* 操作（世帯削除ボタン） */}
-                      <td className="py-3 px-3 text-center">
+                      <td className="py-2.5 px-2 text-center whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => handleDeleteGuardianRow(g, idx)}
                           disabled={isDeletingThisRow}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-xl transition-all border border-rose-500/20 hover:border-rose-500 disabled:opacity-40 cursor-pointer text-xs font-bold whitespace-nowrap shadow-sm"
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-xl transition-all border border-rose-500/20 hover:border-rose-500 disabled:opacity-40 cursor-pointer text-xs font-bold whitespace-nowrap shadow-sm"
                           title="この世帯（保護者・生徒全員・認証コード）を完全に削除"
                         >
                           {isDeletingThisRow ? (
