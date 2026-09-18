@@ -1,13 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
+import { extractHouseholdInfo } from '../lib/householdUtils'
 import { 
   Bus, ArrowRight, RefreshCw, AlertCircle, KeyRound, CheckCircle2, 
   ShieldCheck, Sparkles, Lock, User, Trash2
 } from 'lucide-react'
 
 export const LoginPage: React.FC = () => {
-  const { quickLoginAs, loginAsParentStudent, loginWithAuthCode, refreshAll, clearAllCacheAndResync, syncing } = useApp()
+  const { quickLoginAs, loginAsParentStudent, loginWithAuthCode, refreshAll, clearAllCacheAndResync, syncing, guardianMaster } = useApp()
   const navigate = useNavigate()
   
   const [parentIdentifier, setParentIdentifier] = useState('')
@@ -15,6 +16,10 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // スプレッドシート連動：先頭2世帯の動的世帯情報を抽出
+  const household1 = useMemo(() => extractHouseholdInfo(guardianMaster[0], 1), [guardianMaster])
+  const household2 = useMemo(() => extractHouseholdInfo(guardianMaster[1], 2), [guardianMaster])
 
   // プロトタイプ用：保護者ワンタップログイン（A-1家 / B-1家）
   const handleQuickParentLogin = async (studentName: string) => {
@@ -307,11 +312,11 @@ export const LoginPage: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {/* A-1の保護者 */}
+              {/* 第1世帯（例: 山田家） */}
               <button
                 type="button"
-                disabled={loading || syncing}
-                onClick={() => handleQuickParentLogin('A-1')}
+                disabled={loading || syncing || !household1.primaryStudent}
+                onClick={() => household1.primaryStudent && handleQuickParentLogin(household1.primaryStudent)}
                 className="text-left p-3 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-amber-500/40 hover:border-amber-400 transition-all flex items-center justify-between group cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2 min-w-0">
@@ -320,21 +325,21 @@ export const LoginPage: React.FC = () => {
                   </div>
                   <div className="min-w-0">
                     <div className="text-xs font-black text-white group-hover:text-amber-200 truncate">
-                      👨‍👩‍👦 A-1の保護者として入る
+                      👨‍👩‍👦 {household1.mainLabel}
                     </div>
                     <div className="text-[10px] text-slate-400 truncate">
-                      一人っ子世帯テスト
+                      {household1.subLabel}
                     </div>
                   </div>
                 </div>
                 <ArrowRight className="w-3.5 h-3.5 text-amber-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
               </button>
 
-              {/* B-1の保護者 */}
+              {/* 第2世帯（例: 佐藤家） */}
               <button
                 type="button"
-                disabled={loading || syncing}
-                onClick={() => handleQuickParentLogin('B-1')}
+                disabled={loading || syncing || !household2.primaryStudent}
+                onClick={() => household2.primaryStudent && handleQuickParentLogin(household2.primaryStudent)}
                 className="text-left p-3 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-orange-500/40 hover:border-orange-400 transition-all flex items-center justify-between group cursor-pointer disabled:opacity-50"
               >
                 <div className="flex items-center gap-2 min-w-0">
@@ -343,10 +348,10 @@ export const LoginPage: React.FC = () => {
                   </div>
                   <div className="min-w-0">
                     <div className="text-xs font-black text-white group-hover:text-orange-200 truncate">
-                      👨‍👩‍👦 B-1の保護者として入る
+                      👨‍👩‍👦 {household2.mainLabel}
                     </div>
                     <div className="text-[10px] text-slate-400 truncate">
-                      兄弟世帯（B-1・B-2）テスト
+                      {household2.subLabel}
                     </div>
                   </div>
                 </div>

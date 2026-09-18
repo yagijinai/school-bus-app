@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { IS_DEV_SWITCHER_ENABLED } from '../config/features'
+import { extractHouseholdInfo } from '../lib/householdUtils'
 import { ChevronDown, Check, ShieldCheck, Bus, Users, Sparkles, Trash2 } from 'lucide-react'
 
 export const RoleSwitcher: React.FC = () => {
@@ -12,6 +13,10 @@ export const RoleSwitcher: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // スプレッドシート連動：先頭2世帯の動的世帯情報を抽出
+  const household1 = useMemo(() => extractHouseholdInfo(guardianMaster[0], 1), [guardianMaster])
+  const household2 = useMemo(() => extractHouseholdInfo(guardianMaster[1], 2), [guardianMaster])
 
   // 外部クリックでメニューを閉じる
   useEffect(() => {
@@ -180,83 +185,93 @@ export const RoleSwitcher: React.FC = () => {
             <span className="text-[9px] text-slate-500 font-normal">検証用テスト</span>
           </div>
 
-          {/* A-1の保護者として入る */}
-          <button
-            type="button"
-            onClick={() => handleSelectStudent('A-1')}
-            disabled={isSwitching}
-            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-              user.role === '保護者' && user.studentName === 'A-1'
-                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
-                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-amber-400" />
-              <div>
-                <span className="block font-black">👨‍👩‍👦 A-1の保護者として入る</span>
-                <span className="block text-[10px] text-slate-400 font-normal">一人っ子世帯</span>
+          {/* 第1世帯（例: 山田家） */}
+          {household1.primaryStudent && (
+            <button
+              type="button"
+              onClick={() => handleSelectStudent(household1.primaryStudent)}
+              disabled={isSwitching}
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                user.role === '保護者' && (household1.allStudents.includes(user.studentName || '') || user.email === household1.parentEmail)
+                  ? 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
+                  : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-amber-400" />
+                <div>
+                  <span className="block font-black">👨‍👩‍👦 {household1.mainLabel}</span>
+                  <span className="block text-[10px] text-slate-400 font-normal">{household1.subLabel}</span>
+                </div>
               </div>
-            </div>
-            {user.role === '保護者' && user.studentName === 'A-1' && <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-          </button>
+              {user.role === '保護者' && (household1.allStudents.includes(user.studentName || '') || user.email === household1.parentEmail) && (
+                <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              )}
+            </button>
+          )}
 
-          {/* B-1の保護者として入る */}
-          <button
-            type="button"
-            onClick={() => handleSelectStudent('B-1')}
-            disabled={isSwitching}
-            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-              user.role === '保護者' && user.studentName === 'B-1'
-                ? 'bg-orange-500/20 text-orange-200 border border-orange-500/30'
-                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-orange-400" />
-              <div>
-                <span className="block font-black">👨‍👩‍👦 B-1の保護者として入る</span>
-                <span className="block text-[10px] text-slate-400 font-normal">兄弟世帯（B-1・B-2）</span>
+          {/* 第2世帯（例: 佐藤家） */}
+          {household2.primaryStudent && (
+            <button
+              type="button"
+              onClick={() => handleSelectStudent(household2.primaryStudent)}
+              disabled={isSwitching}
+              className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                user.role === '保護者' && (household2.allStudents.includes(user.studentName || '') || user.email === household2.parentEmail)
+                  ? 'bg-orange-500/20 text-orange-200 border border-orange-500/30'
+                  : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-orange-400" />
+                <div>
+                  <span className="block font-black">👨‍👩‍👦 {household2.mainLabel}</span>
+                  <span className="block text-[10px] text-slate-400 font-normal">{household2.subLabel}</span>
+                </div>
               </div>
-            </div>
-            {user.role === '保護者' && user.studentName === 'B-1' && <Check className="w-3.5 h-3.5 text-orange-400 shrink-0" />}
-          </button>
+              {user.role === '保護者' && (household2.allStudents.includes(user.studentName || '') || user.email === household2.parentEmail) && (
+                <Check className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              )}
+            </button>
+          )}
 
           {/* その他生徒一覧 */}
-          {studentList.filter(st => st.studentName !== 'A-1' && st.studentName !== 'B-1').length > 0 && (
+          {studentList.filter(st => !household1.allStudents.includes(st.studentName) && !household2.allStudents.includes(st.studentName)).length > 0 && (
             <div className="px-2.5 pt-2 pb-1 border-t border-slate-800 text-[10px] text-slate-500 font-bold">
               その他の登録生徒
             </div>
           )}
 
           {/* 3. 各生徒の保護者（動的ループ） */}
-          {studentList.map(st => {
-            const isSelected = user.role === '保護者' && (user.studentName === st.studentName || user.email === `parent_${st.studentName}`)
-            return (
-              <button
-                key={st.studentName}
-                type="button"
-                onClick={() => handleSelectStudent(st.studentName)}
-                disabled={isSwitching}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                  isSelected
-                    ? 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
-                    : 'hover:bg-slate-800 text-slate-300 hover:text-white'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-amber-400" />
-                  <div>
-                    <span className="block font-black">👨‍👩‍👦 {st.studentName} の保護者</span>
-                    <span className="block text-[10px] text-slate-400 font-normal">
-                      バス停: {st.busStopName || '未設定'}
-                    </span>
+          {studentList
+            .filter(st => !household1.allStudents.includes(st.studentName) && !household2.allStudents.includes(st.studentName))
+            .map(st => {
+              const isSelected = user.role === '保護者' && (user.studentName === st.studentName || user.email === `parent_${st.studentName}`)
+              return (
+                <button
+                  key={st.studentName}
+                  type="button"
+                  onClick={() => handleSelectStudent(st.studentName)}
+                  disabled={isSwitching}
+                  className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                    isSelected
+                      ? 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
+                      : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-amber-400" />
+                    <div>
+                      <span className="block font-black">👨‍👩‍👦 {st.studentName} の保護者</span>
+                      <span className="block text-[10px] text-slate-400 font-normal">
+                        バス停: {st.busStopName || '未設定'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                {isSelected && <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-              </button>
-            )
-          })}
+                  {isSelected && <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+                </button>
+              )
+            })}
 
           {/* キャッシュ全消去＆強制再同期 */}
           <div className="pt-2 mt-1 border-t border-slate-800">
