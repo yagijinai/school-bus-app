@@ -25,8 +25,8 @@ function getAutumnalEquinoxDay(year: number): number {
 // 第N月曜日を求める (n: 1-indexed, month: 1-indexed)
 function getNthMonday(year: number, month: number, nth: number): number {
   const firstDay = new Date(year, month - 1, 1).getDay()
-  // 最初の月曜日の日付
-  const firstMonday = ((8 - firstDay) % 7) || 7
+  // 最初の月曜日の日付 (firstDayが1なら1日、2なら7日、0なら2日)
+  const firstMonday = 1 + ((1 - firstDay + 7) % 7)
   return firstMonday + (nth - 1) * 7
 }
 

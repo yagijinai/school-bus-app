@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { 
   Bus, ArrowRight, RefreshCw, AlertCircle, KeyRound, CheckCircle2, 
-  ShieldCheck, Sparkles, Lock, User
+  ShieldCheck, Sparkles, Lock, User, Trash2
 } from 'lucide-react'
 
 export const LoginPage: React.FC = () => {
-  const { quickLoginAs, loginWithAuthCode, refreshAll, syncing } = useApp()
+  const { quickLoginAs, loginAsParentStudent, loginWithAuthCode, refreshAll, clearAllCacheAndResync, syncing } = useApp()
   const navigate = useNavigate()
   
   const [parentIdentifier, setParentIdentifier] = useState('')
@@ -15,6 +15,20 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // プロトタイプ用：保護者ワンタップログイン（A-1家 / B-1家）
+  const handleQuickParentLogin = async (studentName: string) => {
+    setError(null)
+    setLoading(true)
+    try {
+      await loginAsParentStudent(studentName)
+      navigate('/parent')
+    } catch (err: any) {
+      setError(err.message || 'ログインに失敗しました')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // 画面マウント時およびタブ復帰時の自動最新データ同期
   useEffect(() => {
@@ -279,6 +293,106 @@ export const LoginPage: React.FC = () => {
                 </div>
               </div>
               <ArrowRight className="w-3.5 h-3.5 text-emerald-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+            </button>
+          </div>
+
+          {/* 3. 👨‍👩‍👦 プロトタイプ用：保護者ワンタップログイン（A-1家 / B-1家） */}
+          <div className="pt-2 border-t border-slate-800/80 space-y-2">
+            <div className="flex items-center justify-between text-[11px] text-amber-400 font-bold px-1">
+              <span className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                プロトタイプ用：保護者ワンタップログイン
+              </span>
+              <span className="text-[10px] text-slate-500">認証コード入力不要</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {/* A-1の保護者 */}
+              <button
+                type="button"
+                disabled={loading || syncing}
+                onClick={() => handleQuickParentLogin('A-1')}
+                className="text-left p-3 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-amber-500/40 hover:border-amber-400 transition-all flex items-center justify-between group cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-2 bg-amber-500/20 text-amber-300 rounded-lg shrink-0">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-black text-white group-hover:text-amber-200 truncate">
+                      👨‍👩‍👦 A-1の保護者として入る
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      一人っ子世帯テスト
+                    </div>
+                  </div>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-amber-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+
+              {/* B-1の保護者 */}
+              <button
+                type="button"
+                disabled={loading || syncing}
+                onClick={() => handleQuickParentLogin('B-1')}
+                className="text-left p-3 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-orange-500/40 hover:border-orange-400 transition-all flex items-center justify-between group cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="p-2 bg-orange-500/20 text-orange-300 rounded-lg shrink-0">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-black text-white group-hover:text-orange-200 truncate">
+                      👨‍👩‍👦 B-1の保護者として入る
+                    </div>
+                    <div className="text-[10px] text-slate-400 truncate">
+                      兄弟世帯（B-1・B-2）テスト
+                    </div>
+                  </div>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-orange-400 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+            </div>
+          </div>
+
+          {/* 4. キャッシュ全消去・強制同期用ユーティリティ */}
+          <div className="pt-3 border-t border-slate-800/80 flex flex-col sm:flex-row gap-2 items-center justify-between">
+            <button
+              type="button"
+              disabled={loading || syncing}
+              onClick={async () => {
+                try {
+                  await refreshAll(true)
+                  setSuccessMessage('GAS・スプレッドシートから最新データを再同期しました')
+                } catch (e: any) {
+                  setError('再同期に失敗しました: ' + (e?.message || e))
+                }
+              }}
+              className="w-full sm:w-auto flex-1 py-2.5 px-3 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 rounded-xl text-slate-300 hover:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+              title="スプレッドシートの最新データを強制取得"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-amber-400 ${syncing ? 'animate-spin' : ''}`} />
+              <span>{syncing ? '最新データ取得中...' : '🔄 GASから最新同期'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={loading || syncing}
+              onClick={async () => {
+                if (window.confirm('端末の全キャッシュ（localStorage）を消去し、GASから強制最新同期しますか？')) {
+                  const res = await clearAllCacheAndResync()
+                  if (res.success) {
+                    setSuccessMessage(res.message || '保存データを全消去し最新同期しました')
+                  } else {
+                    setError(res.message || '全消去・再同期に失敗しました')
+                  }
+                }
+              }}
+              className="w-full sm:w-auto flex-1 py-2.5 px-3 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/70 hover:border-rose-700 rounded-xl text-rose-300 hover:text-rose-100 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+              title="ブラウザ内の保存データを全削除してGASから強制再取得"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              <span>🗑 保存データを全消去して再同期</span>
             </button>
           </div>
         </div>

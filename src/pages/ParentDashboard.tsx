@@ -17,8 +17,8 @@ export const ParentDashboard: React.FC = () => {
   const navigate = useNavigate()
   const { 
     user, logout, guardianMaster, schedules, 
-    basicSettings, schoolTimetable, busStops, 
-    saveReservation, saveBatchSchedules, linkStudentWithCode, syncing, refreshAll 
+    basicSettings, schoolTimetable, busStops, holidays,
+    saveReservation, saveBatchSchedules, linkStudentWithCode, syncing, refreshAll, lastSyncedTime 
   } = useApp()
 
   // ログイン保護者のマスターデータ（認証コード・生徒名・メールによる高精度突合）
@@ -244,8 +244,6 @@ export const ParentDashboard: React.FC = () => {
 
   // スマホ最適化：一括予約バーのアコーディオン開閉状態（デフォルトは画面を占有しないよう閉じる）
   const [isBatchAccordionOpen, setIsBatchAccordionOpen] = useState<boolean>(false)
-  // リアルタイム最終同期時刻
-  const [lastSyncedTime, setLastSyncedTime] = useState<string>('')
 
   // 今日の日付 (YYYY/MM/DD)
   const todayStrSlash = useMemo(() => {
@@ -265,32 +263,23 @@ export const ParentDashboard: React.FC = () => {
   const todayAfternoonBoarded = todaySched?.boarded_at
   const todayAfternoonAlighted = todaySched?.alighted_at || todaySched?.afternoon_boarding
 
-  // リアルタイム自動同期（20秒ポーリング ＆ 画面復帰時の自動サイレント更新）
+  // リアルタイム自動同期（10秒ポーリング ＆ 画面復帰時の自動サイレント更新）
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date()
-      const hh = String(now.getHours()).padStart(2, '0')
-      const mm = String(now.getMinutes()).padStart(2, '0')
-      const ss = String(now.getSeconds()).padStart(2, '0')
-      setLastSyncedTime(`${hh}:${mm}:${ss}`)
-    }
-    updateTime()
-
     // 10秒間隔の定期バックグラウンド同期（アクティブ時）
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        refreshAll().then(() => updateTime()).catch(() => {})
+        refreshAll().catch(() => {})
       }
     }, 10000)
 
     // 画面復帰時（アプリに切り替えた時やブラウザタブがアクティブになった時）の自動更新
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        refreshAll().then(() => updateTime()).catch(() => {})
+        refreshAll().catch(() => {})
       }
     }
     const handleFocus = () => {
-      refreshAll().then(() => updateTime()).catch(() => {})
+      refreshAll().catch(() => {})
     }
 
     // BroadcastChannel によるタブ間リアルタイム同期通知
@@ -300,7 +289,7 @@ export const ParentDashboard: React.FC = () => {
         channel = new BroadcastChannel('school_bus_boarding_sync')
         channel.onmessage = (e) => {
           if (e.data && e.data.type === 'BOARDING_UPDATED') {
-            updateTime()
+            refreshAll().catch(() => {})
           }
         }
       } catch (err) {
@@ -404,8 +393,8 @@ export const ParentDashboard: React.FC = () => {
 
   // 運行日判定（祝日・長期休業・運休・休校日・土日は予約一覧・一括反映から完全除外）
   const isOperatingDayRow = useCallback((dateSlash: string): boolean => {
-    return isOperatingDay(dateSlash, { basicSettings, schoolTimetable, schedules })
-  }, [basicSettings, schoolTimetable, schedules])
+    return isOperatingDay(dateSlash, { basicSettings, schoolTimetable, schedules, holidays })
+  }, [basicSettings, schoolTimetable, schedules, holidays])
 
   // 週間カレンダーで実際に表示する実運行登校日一覧（平日・登校日のみ）
   const operatingWeekDays = useMemo(() => {
@@ -694,6 +683,12 @@ export const ParentDashboard: React.FC = () => {
             >
               <span>📅 月別カレンダー</span>
             </button>
+            {lastSyncedTime && (
+              <span className="text-[10px] text-slate-400 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 whitespace-nowrap hidden min-[360px]:inline-flex items-center gap-1.5 font-mono shadow-inner">
+                <span className={`w-1.5 h-1.5 rounded-full ${syncing ? 'bg-amber-400 animate-spin' : 'bg-emerald-400 animate-pulse'}`}></span>
+                <span>最終同期 {lastSyncedTime}</span>
+              </span>
+            )}
             <button
               type="button"
               onClick={() => refreshAll()}
@@ -718,7 +713,7 @@ export const ParentDashboard: React.FC = () => {
             {studentNames.map((name, idx) => {
               const isSelected = selectedStudent === name
               const icon = idx === 0 ? '👦' : idx === 1 ? '👧' : idx === 2 ? '🧒' : '👶'
-              const codeLabel = `A-${idx + 1}`
+              const childBadge = `第${idx + 1}子`
 
               return (
                 <button
@@ -732,12 +727,12 @@ export const ParentDashboard: React.FC = () => {
                   }`}
                 >
                   <span className="text-base leading-none">{icon}</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[11px] font-mono font-black ${
-                    isSelected ? 'bg-slate-950/25 text-slate-950' : 'bg-slate-800 text-amber-300'
+                  <span className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                    isSelected ? 'bg-slate-950/20 text-slate-950' : 'bg-slate-800 text-amber-300'
                   }`}>
-                    {codeLabel}
+                    {childBadge}
                   </span>
-                  {!name.includes('A-') && <span>{name}</span>}
+                  <span>{name}</span>
                   {isSelected && (
                     <span className="text-[10px] px-1.5 py-0.5 bg-slate-950/30 text-slate-950 rounded-full font-bold ml-1">
                       選択中
@@ -1705,7 +1700,7 @@ export const ParentDashboard: React.FC = () => {
         schoolTimetable={schoolTimetable}
         basicSettings={basicSettings}
         schedules={schedules}
-        initialDate={new Date()}
+        holidays={holidays}
       />
     </div>
   )

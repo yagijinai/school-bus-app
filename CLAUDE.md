@@ -1,6 +1,6 @@
 # School Bus App Project Guidelines
 
-Please refer to `APP_SPEC.md` for permanent application specifications.
+Please refer to `PROJECT_RULES.md` and `APP_SPEC.md` for permanent application specifications and development rules.
 
 ## Core Rules
 1. **Login Flow**: Top page must start with the 2-choice flow:

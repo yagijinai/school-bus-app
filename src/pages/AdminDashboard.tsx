@@ -10,19 +10,18 @@ import {
 } from 'lucide-react'
 import type { BasicSettingRow, GuardianMasterRow, SchoolTimetableRow, BusStopRow, ScheduleCalendarRow } from '../types/spreadsheet'
 import { toSlashDate, toHyphenDate, formatTimeToHHmm, formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
-import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
-import { checkSuspension } from '../lib/suspensionUtils'
+import { checkSuspension, getUnifiedHolidayName } from '../lib/suspensionUtils'
 import { RoleSwitcher } from '../components/RoleSwitcher'
 
 export const AdminDashboard: React.FC = () => {
   const navigate = useNavigate()
   const { 
     user, logout, basicSettings, schedules, 
-    guardianMaster, busStops, schoolTimetable, publishedMonths,
+    guardianMaster, busStops, schoolTimetable, publishedMonths, holidays,
     saveBasicSetting, saveMonthPublishStatus, saveGuardianMaster, saveSchoolTimetable, saveBatchSchoolTimetable,
     saveBusStop, deleteBusStop, registerNewStudentWithCode,
     deleteGuardianMaster,
-    syncing, refreshAll 
+    syncing, refreshAll, lastSyncedTime, clearAllCacheAndResync
   } = useApp()
 
   const [activeTab, setActiveTab] = useState<'schedules' | 'timetable' | 'guardians' | 'stops' | 'basicSettings'>('schedules')
@@ -695,7 +694,7 @@ export const AdminDashboard: React.FC = () => {
       const padM = String(batchMonth).padStart(2, '0')
       const padD = String(d).padStart(2, '0')
       const dateStr = `${batchYear}/${padM}/${padD}`
-      const hol = getJapaneseHolidayName(dateStr)
+      const hol = getUnifiedHolidayName(dateStr, holidays)
       const suspension = checkSuspension(dateStr, basicSettings)
 
       if (dow === 0 || dow === 6) {
@@ -1168,15 +1167,36 @@ export const AdminDashboard: React.FC = () => {
         {/* 右側: 操作ボタングループ（ゆったり横並び配置） */}
         <div className="flex flex-wrap items-center gap-2.5 pt-2.5 md:pt-0 border-t md:border-t-0 border-slate-800/80 shrink-0">
           <RoleSwitcher />
+          {lastSyncedTime && (
+            <span className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-400 font-mono text-xs flex items-center gap-1.5 whitespace-nowrap shadow-inner">
+              <span className={`w-1.5 h-1.5 rounded-full ${syncing ? 'bg-amber-400 animate-spin' : 'bg-emerald-400 animate-pulse'}`}></span>
+              <span>最終同期 {lastSyncedTime}</span>
+            </span>
+          )}
           <button
             type="button"
-            onClick={() => refreshAll()}
+            onClick={() => refreshAll(true)}
             disabled={syncing}
             className="px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-amber-400 hover:text-amber-300 transition-all text-xs font-bold flex items-center gap-2 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
-            title="スプレッドシートの生データを再取得"
+            title="GASキャッシュを破棄し、スプレッドシートから強制最新同期"
           >
             <RefreshCw className={`h-4 w-4 shrink-0 ${syncing ? 'animate-spin' : ''}`} />
-            <span>{syncing ? 'データ再同期中...' : 'GASから最新データを再同期'}</span>
+            <span>{syncing ? '強制再同期中...' : 'GASから強制再同期'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              if (window.confirm('端末の全キャッシュ（localStorage）を消去し、GASから強制最新同期しますか？')) {
+                const res = await clearAllCacheAndResync()
+                alert(res.message)
+              }
+            }}
+            disabled={syncing}
+            className="px-3.5 py-2.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/70 rounded-xl text-rose-300 hover:text-rose-100 transition-all text-xs font-bold flex items-center gap-1.5 whitespace-nowrap active:scale-95 cursor-pointer shadow-sm shrink-0"
+            title="端末内のlocalStorageを完全消去し、GAS・スプレッドシートから生データを強制取得"
+          >
+            <Trash2 className="h-3.5 w-3.5 shrink-0 text-rose-400" />
+            <span>保存データを全消去して再同期</span>
           </button>
           <button
             type="button"
@@ -2374,7 +2394,7 @@ export const AdminDashboard: React.FC = () => {
                   const label = (data?.calendar_label || '').trim()
                   const note = (data?.note || '').trim()
 
-                  const holidayName = getJapaneseHolidayName(day.dateStr)
+                  const holidayName = getUnifiedHolidayName(day.dateStr, holidays)
                   const suspension = checkSuspension(day.dateStr, basicSettings)
                   const isHoliday = !!holidayName
                   const isSuspended = suspension.isSuspended
@@ -2531,9 +2551,9 @@ export const AdminDashboard: React.FC = () => {
                             <td className="py-3 px-3 font-mono font-bold text-amber-300">
                               <div className="flex flex-col gap-0.5">
                                 <span>{date}</span>
-                                {getJapaneseHolidayName(date) && (
+                                {getUnifiedHolidayName(date, holidays) && (
                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30 w-fit font-sans">
-                                    🎌 {getJapaneseHolidayName(date)}
+                                    🎌 {getUnifiedHolidayName(date, holidays)}
                                   </span>
                                 )}
                               </div>

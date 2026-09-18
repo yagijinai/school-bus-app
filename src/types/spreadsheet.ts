@@ -81,6 +81,12 @@ export interface UserPermissionRow {
   role: UserRole
 }
 
+export interface HolidayItem {
+  date: string // YYYY-MM-DD
+  date_slash?: string // YYYY/MM/DD
+  title: string
+}
+
 // 全マスタ一括取得（action: 'getAllMaster'）レスポンス
 export interface AllMasterData {
   guardianMaster: GuardianMasterRow[]
@@ -89,6 +95,7 @@ export interface AllMasterData {
   basicSettings: BasicSettingRow[]
   schoolTimetable: SchoolTimetableRow[]
   userPermissions: UserPermissionRow[]
+  holidays?: HolidayItem[]
 }
 
 // ログインユーザー情報

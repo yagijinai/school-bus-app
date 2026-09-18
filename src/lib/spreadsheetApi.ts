@@ -10,7 +10,8 @@ import type {
   ScheduleCalendarRow,
   BasicSettingRow,
   SchoolTimetableRow,
-  UserPermissionRow
+  UserPermissionRow,
+  HolidayItem
 } from '../types/spreadsheet'
 
 const GAS_API_URL = 
@@ -191,10 +192,14 @@ async function sendGASPost<T>(body: any): Promise<{ success: boolean; data?: T; 
 
 /**
  * 1. スプレッドシート全6シート一括直接取得（action: "getAllMaster"）
- * 画面を開くたびにスプレッドシートの生データを最新状態でフェッチします。
+ * force=true が指定された場合は GAS 側の ScriptCache を破棄してスプレッドシートから最新を取得
  */
-export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
-  const res = await sendGASGet<any>({ action: 'getAllMaster' })
+export async function fetchSpreadsheetMaster(force?: boolean): Promise<AllMasterData> {
+  const queryParams: Record<string, string> = { action: 'getAllMaster' }
+  if (force) {
+    queryParams.force = 'true'
+  }
+  const res = await sendGASGet<any>(queryParams)
   if (!res.success || !res.data) {
     console.warn('[GAS] getAllMaster returned no data or failed. Fallback to empty.')
     return {
@@ -203,7 +208,8 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
       schedules: [],
       basicSettings: [],
       schoolTimetable: [],
-      userPermissions: []
+      userPermissions: [],
+      holidays: []
     }
   }
 
@@ -268,7 +274,7 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
   }).filter(s => s.date && s.student_name)
 
   // ④ 基本設定・運休期間 (A: 設定名, B: 開始日, C: 終了日, D: 標準運行, E: 内容・時刻, F: 備考)
-  const rawSettings = raw.basicSettings || raw['基本設定・運休期間'] || []
+  const rawSettings = raw.basicSettings || raw['基本設定・運休期間'] || raw['基本・運休期間'] || []
   const basicSettings: BasicSettingRow[] = (Array.isArray(rawSettings) ? rawSettings : []).map((row: any) => ({
     setting_name: String(row.setting_name || row['設定名'] || '').trim(),
     start_date: toSlashDate(row.start_date || row['開始日'] || ''),
@@ -329,13 +335,27 @@ export async function fetchSpreadsheetMaster(): Promise<AllMasterData> {
     }
   }).filter(p => p.email)
 
+  // ⑦ Google公式祝日カレンダーデータ (date, title)
+  const rawHolidays = raw.holidays || []
+  const holidays: HolidayItem[] = (Array.isArray(rawHolidays) ? rawHolidays : []).map((h: any) => {
+    const dStr = String(h.date || h.date_slash || '').trim()
+    const slash = toSlashDate(dStr)
+    const iso = slash.replace(/\//g, '-')
+    return {
+      date: iso,
+      date_slash: slash,
+      title: String(h.title || h.summary || h.name || '').trim()
+    }
+  }).filter((h: any) => h.date && h.title)
+
   return {
     guardianMaster,
     busStops,
     schedules,
     basicSettings,
     schoolTimetable,
-    userPermissions
+    userPermissions,
+    holidays
   }
 }
 

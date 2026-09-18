@@ -10,10 +10,9 @@ import {
   Ban,
   Clock
 } from 'lucide-react'
-import type { SchoolTimetableRow, BasicSettingRow, ScheduleCalendarRow } from '../types/spreadsheet'
+import type { SchoolTimetableRow, BasicSettingRow, ScheduleCalendarRow, HolidayItem } from '../types/spreadsheet'
 import { formatTimeOnly, isMonthPublished } from '../lib/spreadsheetApi'
-import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
-import { checkSuspension as checkSuspensionUtil } from '../lib/suspensionUtils'
+import { checkSuspension as checkSuspensionUtil, getUnifiedHolidayName } from '../lib/suspensionUtils'
 
 interface SchoolTimetableModalProps {
   isOpen: boolean
@@ -21,6 +20,7 @@ interface SchoolTimetableModalProps {
   schoolTimetable: SchoolTimetableRow[]
   basicSettings: BasicSettingRow[]
   schedules?: ScheduleCalendarRow[]
+  holidays?: HolidayItem[]
   initialDate?: Date
 }
 
@@ -30,6 +30,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
   schoolTimetable,
   basicSettings,
   schedules = [],
+  holidays = [],
   initialDate
 }) => {
   const [currentDate, setCurrentDate] = useState<Date>(() => initialDate || new Date())
@@ -37,17 +38,16 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
   const [mobileFilter, setMobileFilter] = useState<'all' | 'weekday'>('weekday')
 
   const todayItemRef = useRef<HTMLDivElement>(null)
+  const wasOpenRef = useRef(false)
 
-  // モーダルオープン時または初期日付変更時に確実に当月へ同期
+  // モーダルが「閉」から「開」になった瞬間のみ当月（または initialDate）に初期化
+  // 親の再レンダリングやバックグラウンドデータ取得が走っても、ユーザーが切り替えた月を保持する
   useEffect(() => {
-    if (isOpen) {
-      if (initialDate) {
-        setCurrentDate(initialDate)
-      } else {
-        setCurrentDate(new Date())
-      }
+    if (isOpen && !wasOpenRef.current) {
+      setCurrentDate(initialDate ? new Date(initialDate.getTime()) : new Date())
     }
-  }, [isOpen, initialDate])
+    wasOpenRef.current = isOpen
+  }, [isOpen])
 
   useEffect(() => {
     if (isOpen) {
@@ -176,7 +176,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
       const dObj = new Date(year, month, d)
       const dayOfWeek = dObj.getDay()
       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
-      const holiday = getJapaneseHolidayName(dateStr)
+      const holiday = getUnifiedHolidayName(dateStr, holidays)
       const suspension = checkSuspension(dateStr)
       const tripInfo = getDayTripTimes(dateStr)
 
@@ -200,7 +200,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
     }
 
     return list
-  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings])
+  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings, holidays])
 
   // モバイル表示でフィルター適用
   const filteredMonthDays = useMemo(() => {
@@ -250,7 +250,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         isCurrentMonth: false,
         isToday: dateStr === todayStr,
         dayOfWeek: dayDate.getDay(),
-        holiday: getJapaneseHolidayName(dateStr),
+        holiday: getUnifiedHolidayName(dateStr, holidays),
         suspension: checkSuspension(dateStr),
         timetable: tripInfo.timetable,
         morning: tripInfo.morning,
@@ -272,7 +272,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         isCurrentMonth: true,
         isToday: dateStr === todayStr,
         dayOfWeek: dayDate.getDay(),
-        holiday: getJapaneseHolidayName(dateStr),
+        holiday: getUnifiedHolidayName(dateStr, holidays),
         suspension: checkSuspension(dateStr),
         timetable: tripInfo.timetable,
         morning: tripInfo.morning,
@@ -297,7 +297,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
         isCurrentMonth: false,
         isToday: dateStr === todayStr,
         dayOfWeek: dayDate.getDay(),
-        holiday: getJapaneseHolidayName(dateStr),
+        holiday: getUnifiedHolidayName(dateStr, holidays),
         suspension: checkSuspension(dateStr),
         timetable: tripInfo.timetable,
         morning: tripInfo.morning,
@@ -309,7 +309,7 @@ export const SchoolTimetableModal: React.FC<SchoolTimetableModalProps> = ({
     }
 
     return days
-  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings])
+  }, [currentDate, todayStr, schoolTimetable, schedules, basicSettings, holidays])
 
   if (!isOpen) return null
 

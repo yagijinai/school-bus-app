@@ -2,12 +2,12 @@ import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { IS_DEV_SWITCHER_ENABLED } from '../config/features'
-import { ChevronDown, Check, ShieldCheck, Bus, Users, Sparkles } from 'lucide-react'
+import { ChevronDown, Check, ShieldCheck, Bus, Users, Sparkles, Trash2 } from 'lucide-react'
 
 export const RoleSwitcher: React.FC = () => {
   if (!IS_DEV_SWITCHER_ENABLED) return null
 
-  const { user, quickLoginAs, loginAsParentStudent, guardianMaster } = useApp()
+  const { user, quickLoginAs, loginAsParentStudent, guardianMaster, clearAllCacheAndResync } = useApp()
   const navigate = useNavigate()
   const [isOpen, setIsOpen] = useState(false)
   const [isSwitching, setIsSwitching] = useState(false)
@@ -172,10 +172,62 @@ export const RoleSwitcher: React.FC = () => {
           </button>
 
           {/* 保護者セクション見出し */}
-          <div className="px-2.5 pt-2 pb-1 border-t border-slate-800 text-[10px] text-amber-400 font-bold flex items-center gap-1">
-            <Users className="w-3 h-3" />
-            <span>保護者（生徒別切り替え）</span>
+          <div className="px-2.5 pt-2 pb-1 border-t border-slate-800 text-[10px] text-amber-400 font-bold flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Users className="w-3 h-3" />
+              保護者ワンタップ切替
+            </span>
+            <span className="text-[9px] text-slate-500 font-normal">検証用テスト</span>
           </div>
+
+          {/* A-1の保護者として入る */}
+          <button
+            type="button"
+            onClick={() => handleSelectStudent('A-1')}
+            disabled={isSwitching}
+            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+              user.role === '保護者' && user.studentName === 'A-1'
+                ? 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
+                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-amber-400" />
+              <div>
+                <span className="block font-black">👨‍👩‍👦 A-1の保護者として入る</span>
+                <span className="block text-[10px] text-slate-400 font-normal">一人っ子世帯</span>
+              </div>
+            </div>
+            {user.role === '保護者' && user.studentName === 'A-1' && <Check className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+          </button>
+
+          {/* B-1の保護者として入る */}
+          <button
+            type="button"
+            onClick={() => handleSelectStudent('B-1')}
+            disabled={isSwitching}
+            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+              user.role === '保護者' && user.studentName === 'B-1'
+                ? 'bg-orange-500/20 text-orange-200 border border-orange-500/30'
+                : 'hover:bg-slate-800 text-slate-300 hover:text-white'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-orange-400" />
+              <div>
+                <span className="block font-black">👨‍👩‍👦 B-1の保護者として入る</span>
+                <span className="block text-[10px] text-slate-400 font-normal">兄弟世帯（B-1・B-2）</span>
+              </div>
+            </div>
+            {user.role === '保護者' && user.studentName === 'B-1' && <Check className="w-3.5 h-3.5 text-orange-400 shrink-0" />}
+          </button>
+
+          {/* その他生徒一覧 */}
+          {studentList.filter(st => st.studentName !== 'A-1' && st.studentName !== 'B-1').length > 0 && (
+            <div className="px-2.5 pt-2 pb-1 border-t border-slate-800 text-[10px] text-slate-500 font-bold">
+              その他の登録生徒
+            </div>
+          )}
 
           {/* 3. 各生徒の保護者（動的ループ） */}
           {studentList.map(st => {
@@ -205,6 +257,32 @@ export const RoleSwitcher: React.FC = () => {
               </button>
             )
           })}
+
+          {/* キャッシュ全消去＆強制再同期 */}
+          <div className="pt-2 mt-1 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={async () => {
+                if (window.confirm('端末の保存データ（localStorage）を全消去し、GASから最新データを強制再取得しますか？')) {
+                  setIsSwitching(true)
+                  try {
+                    const res = await clearAllCacheAndResync()
+                    setIsOpen(false)
+                    alert(res.message)
+                  } finally {
+                    setIsSwitching(false)
+                  }
+                }
+              }}
+              disabled={isSwitching}
+              className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between cursor-pointer text-rose-400 hover:text-rose-200 hover:bg-rose-950/40 border border-transparent hover:border-rose-800/60"
+            >
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>🗑 保存データを全消去して再同期</span>
+              </div>
+            </button>
+          </div>
         </div>
       )}
     </div>

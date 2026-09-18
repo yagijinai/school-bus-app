@@ -20,8 +20,7 @@ import {
 import { RoleSwitcher } from '../components/RoleSwitcher'
 import { SchoolTimetableModal } from '../components/SchoolTimetableModal'
 import { formatTimeToHHmm, extractBoardingTime, isMonthPublished } from '../lib/spreadsheetApi'
-import { getJapaneseHolidayName } from '../lib/japaneseHolidays'
-import { checkSuspension } from '../lib/suspensionUtils'
+import { checkSuspension, getUnifiedHolidayName } from '../lib/suspensionUtils'
 import type { BasicSettingRow } from '../types/spreadsheet'
 
 // 生徒名の文字長に応じた動的フォントサイズ（1行収容用）
@@ -45,6 +44,7 @@ export const DriverDashboard: React.FC = () => {
     guardianMaster,
     basicSettings,
     schoolTimetable,
+    holidays,
     recordBoarding
   } = useApp()
 
@@ -96,10 +96,10 @@ export const DriverDashboard: React.FC = () => {
     return weekDays[d.getDay()]
   }, [selectedDate])
 
-  // 祝日判定
+  // 祝日判定（Google公式祝日優先＋内蔵フォールバック）
   const holidayName = useMemo(() => {
-    return getJapaneseHolidayName(selectedDate)
-  }, [selectedDate])
+    return getUnifiedHolidayName(selectedDate, holidays)
+  }, [selectedDate, holidays])
 
   // 運休判定（MM/DD年非依存自動補完対応）
   const holidayInfo = useMemo(() => {
@@ -976,6 +976,7 @@ export const DriverDashboard: React.FC = () => {
         schoolTimetable={schoolTimetable}
         basicSettings={basicSettings}
         schedules={schedules}
+        holidays={holidays}
         initialDate={new Date(selectedDate.replace(/\//g, '-'))}
       />
     </div>

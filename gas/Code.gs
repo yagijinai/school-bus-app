@@ -56,6 +56,62 @@
  *    C列: 役割（管理者 / 運転手 / 保護者 等）
  */
 
+/**
+ * =========================================================================
+ * CacheService 高速化キャッシュ機構（TTL: 30分 = 1800秒）
+ * =========================================================================
+ */
+const CACHE_TTL_SECONDS = 1800;
+
+const CACHE_KEYS = {
+  GUARDIAN_MASTER: 'sb_cache_guardian_master_v1',
+  BUS_STOPS: 'sb_cache_bus_stops_v1',
+  BASIC_SETTINGS: 'sb_cache_basic_settings_v1',
+  SCHOOL_TIMETABLE: 'sb_cache_school_timetable_v1',
+  USER_PERMISSIONS: 'sb_cache_user_permissions_v1',
+  HOLIDAYS: 'sb_cache_holidays_v1',
+  SCHEDULES: 'sb_cache_schedules_v1'
+};
+
+function getScriptCacheItem(key) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const cached = cache.get(key);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+  } catch (e) {
+    console.warn('[Cache] getScriptCacheItem failed for ' + key + ':', e);
+  }
+  return null;
+}
+
+function setScriptCacheItem(key, data, ttlSeconds) {
+  try {
+    const jsonStr = JSON.stringify(data);
+    // CacheService 1エントリの上限は 100KB (安全マージンとして95000文字以内)
+    if (jsonStr.length < 95000) {
+      const cache = CacheService.getScriptCache();
+      cache.put(key, jsonStr, ttlSeconds || CACHE_TTL_SECONDS);
+    } else {
+      console.warn('[Cache] Data size exceeds 95KB for ' + key + ', skipping cache.');
+    }
+  } catch (e) {
+    console.warn('[Cache] setScriptCacheItem failed for ' + key + ':', e);
+  }
+}
+
+function clearAllScriptCaches() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const keys = Object.values(CACHE_KEYS);
+    cache.removeAll(keys);
+    console.log('[Cache] Successfully cleared all script caches.');
+  } catch (e) {
+    console.warn('[Cache] clearAllScriptCaches failed:', e);
+  }
+}
+
 function doGet(e) {
   return handleRequest(e ? e.parameter : {}, 'GET');
 }
@@ -125,7 +181,12 @@ function handleRequest(params, method) {
       case 'verifyStudent':
         return createJsonResponse(verifyStudentInSheet(params.code, params.email));
       case 'getAllMaster':
-        return createJsonResponse(getAllMasterFromSheet());
+        return createJsonResponse(getAllMasterFromSheet(params));
+      case 'clearCache':
+        clearAllScriptCaches();
+        return createJsonResponse({ status: 'success', message: 'ScriptCacheをクリアしました' });
+      case 'getHolidays':
+        return createJsonResponse({ status: 'success', holidays: getGoogleOfficialHolidays(params.year) });
       default:
         return createJsonResponse({
           status: 'success',
@@ -378,6 +439,7 @@ function saveReservationToSheet(data) {
       [currentId, dateStr, studentName, morningStatus, afternoonStatus, trip1, trip2, trip3, note, updatedAt, parentEmail]
     ];
     sheet.getRange(targetRow, 1, 1, 11).setValues(rowValues);
+    clearAllScriptCaches();
     return {
       status: 'success',
       action: 'updated',
@@ -401,6 +463,7 @@ function saveReservationToSheet(data) {
       [newId, dateStr, studentName, morningStatus, afternoonStatus, trip1, trip2, trip3, note, updatedAt, parentEmail]
     ];
     sheet.getRange(newRow, 1, 1, 11).setValues(rowValues);
+    clearAllScriptCaches();
     return {
       status: 'success',
       action: 'inserted',
@@ -440,9 +503,9 @@ function saveBatchSchedulesToSheet(schedules) {
 }
 
 /**
- * 3. 運行予定カレンダー一覧取得
+ * 3. 運行予定カレンダー一覧取得（前月・当月・翌月の必要最小限に自動絞り込み）
  */
-function getSchedulesFromSheet(email) {
+function getSchedulesFromSheet(email, options) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('運行予定カレンダー');
   if (!sheet) return { status: 'success', data: [] };
@@ -454,6 +517,20 @@ function getSchedulesFromSheet(email) {
   const values = sheet.getRange(2, 1, lastRow - 1, numCols).getValues();
   const cleanEmail = email ? String(email).trim().toLowerCase() : '';
 
+  // 期間絞り込み：全行探索ではなく「前月・当月・翌月（3ヶ月分）」に限定してペイロードと処理時間を極小化
+  // options.all === true の場合のみ全期間を取得
+  let targetMonths = null;
+  if (!options || !options.all) {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const prevM = new Date(y, m - 1, 1);
+    const currM = new Date(y, m, 1);
+    const nextM = new Date(y, m + 1, 1);
+    const fmt = d => d.getFullYear() + '/' + ('0' + (d.getMonth() + 1)).slice(-2);
+    targetMonths = new Set([fmt(prevM), fmt(currM), fmt(nextM)]);
+  }
+
   const results = [];
   for (let i = 0; i < values.length; i++) {
     const row = values[i];
@@ -462,12 +539,23 @@ function getSchedulesFromSheet(email) {
       continue;
     }
 
+    const rowDate = formatDateToSlash(row[1]);
+    if (!rowDate) continue;
+
+    // 前月・当月・翌月以外の過去・未来データは除外（通信量とパース負荷を劇的削減）
+    if (targetMonths) {
+      const ym = rowDate.slice(0, 7);
+      if (!targetMonths.has(ym)) {
+        continue;
+      }
+    }
+
     const morningBoarding = String(row[11] || '').trim();
     const afternoonBoarding = String(row[12] || '').trim();
 
     results.push({
       'ID': row[0],
-      '日付': formatDateToSlash(row[1]),
+      '日付': rowDate,
       '生徒名': String(row[2] || '').trim(),
       '登校ステータス': String(row[3] || '').trim(),
       '下校ステータス': String(row[4] || '').trim(),
@@ -632,6 +720,7 @@ function recordBoardingToSheet(params) {
       sheet.getRange(targetRow, updatedAtCol).setValue(currentDateTime);
     }
 
+    clearAllScriptCaches();
     return {
       status: 'success',
       action: 'updated',
@@ -689,6 +778,7 @@ function recordBoardingToSheet(params) {
     newRowData[targetCol - 1] = boardingValue;
 
     sheet.getRange(newRow, 1, 1, maxColCount).setValues([newRowData]);
+    clearAllScriptCaches();
 
     return {
       status: 'success',
@@ -893,10 +983,12 @@ function saveGuardianMasterToSheet(params) {
       email, s1, s2, s3, s4, busStop, memo, toSchool, fromSchool, finalCode
     ]]);
     SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return { status: 'success', success: true, action: 'updated', row: targetRow, message: '保護者マスターを更新しました' };
   } else {
     sheet.appendRow([email, s1, s2, s3, s4, busStop, memo, toSchool, fromSchool, authCode]);
     SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return { status: 'success', success: true, action: 'inserted', row: sheet.getLastRow(), message: '保護者マスターに新規登録しました' };
   }
 }
@@ -933,6 +1025,7 @@ function registerNewStudentWithCodeToSheet(params) {
 
   sheet.appendRow(['', s1, s2, s3, s4, busStop, note, defMorning, defAfternoon, authCode]);
   SpreadsheetApp.flush();
+  clearAllScriptCaches();
 
   return {
     status: 'success',
@@ -1070,6 +1163,7 @@ function linkStudentWithCodeToSheet(params) {
   }
 
   SpreadsheetApp.flush();
+  clearAllScriptCaches();
 
   const updatedNames = [curS1, curS2, curS3, curS4].filter(Boolean);
   return {
@@ -1117,6 +1211,7 @@ function deleteGuardianMasterFromSheet(params) {
     if (match) {
       sheet.deleteRow(i + 2);
       SpreadsheetApp.flush();
+      clearAllScriptCaches();
       return {
         status: 'success',
         success: true,
@@ -1158,11 +1253,54 @@ function getBusStopsFromSheet() {
 }
 
 /**
+ * シート名「基本設定・運休期間」または「基本・運休期間」の安全な取得
+ */
+function getBasicSettingsSheet(ss) {
+  if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName('基本設定・運休期間') || ss.getSheetByName('基本・運休期間');
+}
+
+/**
+ * Google公式カレンダーから日本の国民の祝日・振替休日を自動取得
+ */
+function getGoogleOfficialHolidays(targetYear) {
+  const holidays = [];
+  try {
+    const calendar = CalendarApp.getCalendarById('japanese__ja@holiday.calendar.google.com');
+    if (!calendar) return holidays;
+
+    const baseYear = Number(targetYear) || new Date().getFullYear();
+    // 前年・当年・翌年の3年分を網羅して取得
+    const startDate = new Date(baseYear - 1, 0, 1);
+    const endDate = new Date(baseYear + 2, 0, 1);
+
+    const events = calendar.getEvents(startDate, endDate);
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      const d = ev.getStartTime();
+      const yyyy = d.getFullYear();
+      const mm = ('0' + (d.getMonth() + 1)).slice(-2);
+      const dd = ('0' + d.getDate()).slice(-2);
+      const dateIso = yyyy + '-' + mm + '-' + dd;
+      const dateSlash = yyyy + '/' + mm + '/' + dd;
+      holidays.push({
+        date: dateIso,
+        date_slash: dateSlash,
+        title: ev.getTitle()
+      });
+    }
+  } catch (e) {
+    Logger.log('Google祝日カレンダー取得エラー: ' + e.toString());
+  }
+  return holidays;
+}
+
+/**
  * 8. 基本設定・運休期間一覧取得
  */
 function getBasicSettingsFromSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName('基本設定・運休期間');
+  const sheet = getBasicSettingsSheet(ss);
   if (!sheet) return { status: 'success', data: [] };
 
   const lastRow = sheet.getLastRow();
@@ -1266,31 +1404,90 @@ function verifyStudentInSheet(code, email) {
 }
 
 /**
- * 12. 全6シートマスタ一括完全取得
+ * 12. 全6シートマスタ一括完全取得（Google公式祝日も自動同梱 ＆ CacheService高速化対応）
+ * params.force === 'true' の場合は ScriptCache を全消去してスプレッドシートから強制最新取得
  */
-function getAllMasterFromSheet() {
-  const guardianMasterRes = getGuardianMasterFromSheet();
-  const busStopsRes = getBusStopsFromSheet();
-  const schedulesRes = getSchedulesFromSheet('');
-  const basicSettingsRes = getBasicSettingsFromSheet();
-  const schoolTimetableRes = getSchoolTimetableFromSheet();
-  const userPermissionsRes = getUserPermissionsFromSheet();
+function getAllMasterFromSheet(params) {
+  const isForce = params && (params.force === 'true' || params.force === true);
+  if (isForce) {
+    console.log('[getAllMaster] Force refresh requested. Clearing all script caches...');
+    clearAllScriptCaches();
+  }
+
+  // 1. 生徒・保護者マスター
+  let guardianMaster = !isForce ? getScriptCacheItem(CACHE_KEYS.GUARDIAN_MASTER) : null;
+  if (!guardianMaster) {
+    const res = getGuardianMasterFromSheet();
+    guardianMaster = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.GUARDIAN_MASTER, guardianMaster);
+  }
+
+  // 2. バス停マスタ
+  let busStops = !isForce ? getScriptCacheItem(CACHE_KEYS.BUS_STOPS) : null;
+  if (!busStops) {
+    const res = getBusStopsFromSheet();
+    busStops = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.BUS_STOPS, busStops);
+  }
+
+  // 3. 運行予定カレンダー（前月・当月・翌月の3ヶ月に絞り込み取得）
+  let schedules = !isForce ? getScriptCacheItem(CACHE_KEYS.SCHEDULES) : null;
+  if (!schedules) {
+    const res = getSchedulesFromSheet('', { all: false });
+    schedules = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.SCHEDULES, schedules);
+  }
+
+  // 4. 基本設定・運休期間
+  let basicSettings = !isForce ? getScriptCacheItem(CACHE_KEYS.BASIC_SETTINGS) : null;
+  if (!basicSettings) {
+    const res = getBasicSettingsFromSheet();
+    basicSettings = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.BASIC_SETTINGS, basicSettings);
+  }
+
+  // 5. 学校用時刻表
+  let schoolTimetable = !isForce ? getScriptCacheItem(CACHE_KEYS.SCHOOL_TIMETABLE) : null;
+  if (!schoolTimetable) {
+    const res = getSchoolTimetableFromSheet();
+    schoolTimetable = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.SCHOOL_TIMETABLE, schoolTimetable);
+  }
+
+  // 6. ユーザー権限マスタ
+  let userPermissions = !isForce ? getScriptCacheItem(CACHE_KEYS.USER_PERMISSIONS) : null;
+  if (!userPermissions) {
+    const res = getUserPermissionsFromSheet();
+    userPermissions = res.data || [];
+    setScriptCacheItem(CACHE_KEYS.USER_PERMISSIONS, userPermissions);
+  }
+
+  // 7. Google公式祝日（キャッシュ期間: 24時間）
+  const currentYear = new Date().getFullYear();
+  const holidaysKey = CACHE_KEYS.HOLIDAYS + '_' + currentYear;
+  let holidays = !isForce ? getScriptCacheItem(holidaysKey) : null;
+  if (!holidays) {
+    holidays = getGoogleOfficialHolidays(currentYear);
+    setScriptCacheItem(holidaysKey, holidays, 86400);
+  }
 
   return {
     status: 'success',
-    guardianMaster: guardianMasterRes.data || [],
-    busStops: busStopsRes.data || [],
-    schedules: schedulesRes.data || [],
-    basicSettings: basicSettingsRes.data || [],
-    schoolTimetable: schoolTimetableRes.data || [],
-    userPermissions: userPermissionsRes.data || [],
+    guardianMaster: guardianMaster,
+    busStops: busStops,
+    schedules: schedules,
+    basicSettings: basicSettings,
+    schoolTimetable: schoolTimetable,
+    userPermissions: userPermissions,
+    holidays: holidays,
     // 日本語キー互換
-    '生徒・保護者マスター': guardianMasterRes.data || [],
-    'バス停マスタ': busStopsRes.data || [],
-    '運行予定カレンダー': schedulesRes.data || [],
-    '基本設定・運休期間': basicSettingsRes.data || [],
-    '学校用時刻表': schoolTimetableRes.data || [],
-    'ユーザー権限マスタ': userPermissionsRes.data || []
+    '生徒・保護者マスター': guardianMaster,
+    'バス停マスタ': busStops,
+    '運行予定カレンダー': schedules,
+    '基本設定・運休期間': basicSettings,
+    '基本・運休期間': basicSettings,
+    '学校用時刻表': schoolTimetable,
+    'ユーザー権限マスタ': userPermissions
   };
 }
 
@@ -1305,7 +1502,7 @@ function saveBasicSettingToSheet(params) {
   }
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('基本設定・運休期間');
+  let sheet = getBasicSettingsSheet(ss);
   if (!sheet) {
     sheet = ss.insertSheet('基本設定・運休期間');
     sheet.appendRow(['設定名', '開始日', '終了日', '標準運行', '内容・時刻', '備考']);
@@ -1344,6 +1541,7 @@ function saveBasicSettingToSheet(params) {
       note
     ]]);
     SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: '基本設定を更新しました',
@@ -1355,6 +1553,7 @@ function saveBasicSettingToSheet(params) {
     // 存在しない場合は新規追加
     sheet.appendRow([settingName, writeStart, writeEnd, standardOperation, contentTime, note]);
     SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: '基本設定を新規追加しました',
@@ -1523,6 +1722,7 @@ function saveSchoolTimetableToSheet(params) {
       note,
       calendarDisplay
     ]]);
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: '学校用時刻表を更新しました',
@@ -1532,6 +1732,7 @@ function saveSchoolTimetableToSheet(params) {
     };
   } else {
     sheet.appendRow([dateStr, morningTrip, trip1, trip2, trip3, note, calendarDisplay]);
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: '学校用時刻表に新規追加しました',
@@ -1635,6 +1836,9 @@ function saveBatchSchoolTimetableToSheet(params) {
     }
   }
 
+  SpreadsheetApp.flush();
+  clearAllScriptCaches();
+
   const total = updatedCount + insertedCount;
   return {
     status: 'success',
@@ -1688,6 +1892,8 @@ function saveBusStopToSheet(params) {
       arrivalTime,
       order || (targetRow - 1)
     ]]);
+    SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: 'バス停マスタを更新しました',
@@ -1698,6 +1904,8 @@ function saveBusStopToSheet(params) {
   } else {
     const newOrder = order || (lastRow >= 2 ? lastRow : 1);
     sheet.appendRow([name, address, arrivalTime, newOrder]);
+    SpreadsheetApp.flush();
+    clearAllScriptCaches();
     return {
       status: 'success',
       message: 'バス停マスタに新規追加しました',
@@ -1728,6 +1936,8 @@ function deleteBusStopFromSheet(stopName) {
   for (let i = 0; i < names.length; i++) {
     if (String(names[i][0]).trim() === targetName) {
       sheet.deleteRow(i + 2);
+      SpreadsheetApp.flush();
+      clearAllScriptCaches();
       return {
         status: 'success',
         message: `バス停「${targetName}」を削除しました`,

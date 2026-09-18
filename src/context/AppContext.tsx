@@ -7,7 +7,8 @@ import type {
   ScheduleCalendarRow,
   BasicSettingRow,
   SchoolTimetableRow,
-  UserPermissionRow
+  UserPermissionRow,
+  HolidayItem
 } from '../types/spreadsheet'
 import { 
   fetchSpreadsheetMaster, 
@@ -40,8 +41,16 @@ function loadCachedMaster(): AllMasterData | null {
     const raw = localStorage.getItem(SWR_MASTER_CACHE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      if (parsed && Array.isArray(parsed.guardianMaster) && parsed.guardianMaster.length > 0) {
-        return parsed
+      if (parsed && typeof parsed === 'object') {
+        const hasAnyData = (
+          (Array.isArray(parsed.guardianMaster) && parsed.guardianMaster.length > 0) ||
+          (Array.isArray(parsed.basicSettings) && parsed.basicSettings.length > 0) ||
+          (Array.isArray(parsed.schoolTimetable) && parsed.schoolTimetable.length > 0) ||
+          (Array.isArray(parsed.schedules) && parsed.schedules.length > 0)
+        )
+        if (hasAnyData) {
+          return parsed
+        }
       }
     }
   } catch (e) {
@@ -71,6 +80,13 @@ interface AppContextType {
   loading: boolean
   syncing: boolean
   error: string | null
+  lastSyncedTime: string
+  // 5秒タイムアウト復帰フォールバックUI管理
+  showTimeoutFallback: boolean
+  hasCachedData: boolean
+  isUsingCachedData: boolean
+  openWithCachedData: () => void
+  retryConnection: () => Promise<void>
   // スプレッドシート直結生データ
   guardianMaster: GuardianMasterRow[]
   busStops: BusStopRow[]
@@ -78,12 +94,13 @@ interface AppContextType {
   basicSettings: BasicSettingRow[]
   schoolTimetable: SchoolTimetableRow[]
   userPermissions: UserPermissionRow[]
+  holidays: HolidayItem[]
   // 公開月リスト（ローカル保護ガード反映済）
   publishedMonths: string[]
   // 操作
   login: (email: string) => Promise<{ success: boolean; message?: string; needAuthCode?: boolean; email?: string }>
   logout: () => void
-  refreshAll: () => Promise<void>
+  refreshAll: (force?: boolean) => Promise<void>
   saveReservation: (payload: Parameters<typeof saveReservationToSheet>[0]) => Promise<{ success: boolean; message?: string }>
   saveBatchSchedules: (schedules: Parameters<typeof saveBatchSchedulesToSheet>[0]) => Promise<{ success: boolean; message?: string; total?: number; updatedCount?: number; insertedCount?: number }>
   recordBoarding: (payload: { date: string; studentName: string; tripType: '登校' | '下校'; boarded: boolean; busStop?: string; rollCallType?: 'boarded' | 'alighted' }) => Promise<{ success: boolean; boardingValue?: string; message?: string }>
@@ -101,6 +118,7 @@ interface AppContextType {
   quickLoginAs: (type: string, studentName?: string) => Promise<void>
   loginAsParentStudent: (studentName: string) => Promise<void>
   loginWithAuthCode: (emailOrName: string, authCode: string) => Promise<{ success: boolean; message?: string; studentNames?: string[] }>
+  clearAllCacheAndResync: () => Promise<{ success: boolean; message?: string }>
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined)
@@ -113,20 +131,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const initialUser = useMemo(() => loadCachedUser(), [])
 
   const [user, setUserState] = useState<AuthUser | null>(() => initialUser)
-  // 有効なキャッシュが存在すれば最初から loading = false（0秒即時描画！）
+  // SWR方式（Stale-While-Revalidate）: 端末にキャッシュがある場合は loading = false で即座に描画（体感0秒起動）
+  // キャッシュがない初回利用時のみ loading = true で待機画面を表示
   const [loading, setLoading] = useState<boolean>(() => !initialCache)
   const [syncing, setSyncing] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('sb_last_synced_time') || ''
+    }
+    return ''
+  })
 
-  // 全マスタ（SWRキャッシュで即時展開）
+  // タイムアウト＆キャッシュ利用ステート
+  const [showTimeoutFallback, setShowTimeoutFallback] = useState<boolean>(false)
+  const [isUsingCachedData, setIsUsingCachedData] = useState<boolean>(false)
+  const [fetchAttempt, setFetchAttempt] = useState<number>(0)
+
+  // 全マスタ（SWRキャッシュで即時展開準備）
   const [data, setDataState] = useState<AllMasterData>(() => initialCache || {
     guardianMaster: DEFAULT_FALLBACK_GUARDIANS,
     busStops: [],
     schedules: [],
     basicSettings: [],
     schoolTimetable: [],
-    userPermissions: []
+    userPermissions: [],
+    holidays: []
   })
+
+  // 端末の保存キャッシュデータ有無判定
+  const hasCachedData = useMemo(() => {
+    return loadCachedMaster() !== null
+  }, [data, fetchAttempt])
+
+  // 5秒タイムアウト判定タイマー
+  // isLoading === true の開始から5000ms経過で showTimeoutFallback を有効化
+  // 通信完了時は loading が false になるため自動的に解除される
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    if (loading) {
+      setShowTimeoutFallback(false)
+      timer = setTimeout(() => {
+        setShowTimeoutFallback(true)
+      }, 5000)
+    } else {
+      setShowTimeoutFallback(false)
+    }
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [loading, fetchAttempt])
+
+  // 前回の保存データで開く（ケースA）
+  const openWithCachedData = useCallback(() => {
+    const cached = loadCachedMaster()
+    if (cached) {
+      setDataState(cached)
+    }
+    const cachedUser = loadCachedUser()
+    if (cachedUser && !user) {
+      setUserState(cachedUser)
+    }
+    setLoading(false)
+    setIsUsingCachedData(true)
+    setShowTimeoutFallback(false)
+  }, [user])
 
   // キャッシュ書き込みラッパー
   const setData = useCallback((updater: AllMasterData | ((prev: AllMasterData) => AllMasterData)) => {
@@ -192,12 +261,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Array.from(set).sort()
   }, [data.basicSettings, publishedGuard])
 
-  // スプレッドシート最新データの一括直接フェッチ
-  const refreshAll = useCallback(async () => {
+  // スプレッドシート最新データの一括直接フェッチ（force=true 指定時はGAS側ScriptCacheを強制破棄）
+  const refreshAll = useCallback(async (force?: boolean) => {
     setSyncing(true)
     setError(null)
     try {
-      const master = await fetchSpreadsheetMaster()
+      // テスト・動作検証用：URLパラメータ ?mock_delay=... がある場合は擬似遅延
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search)
+        const mockDelay = params.get('mock_delay')
+        if (mockDelay && !isNaN(Number(mockDelay))) {
+          await new Promise(r => setTimeout(r, Number(mockDelay)))
+        }
+      }
+
+      const master = await fetchSpreadsheetMaster(force)
 
       // ガード適用：直近にローカルで保存・更新された確定ステータスをマージして古いスプレッドシートデータによるロールバックを防止
       const activeGuard = publishedGuardRef.current
@@ -247,21 +325,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setData(master)
+      setIsUsingCachedData(false)
+      setShowTimeoutFallback(false)
+      setLoading(false)
+
+      // 最終同期時刻を更新
+      const now = new Date()
+      const hh = String(now.getHours()).padStart(2, '0')
+      const mm = String(now.getMinutes()).padStart(2, '0')
+      const ss = String(now.getSeconds()).padStart(2, '0')
+      const timeStr = `${hh}:${mm}:${ss}`
+      setLastSyncedTime(timeStr)
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sb_last_synced_time', timeStr)
+        }
+      } catch (e) {}
     } catch (err: any) {
       console.error('[AppContext] Failed to refresh spreadsheet data:', err)
-      // キャッシュが存在しない初期表示時のみエラー画面を表示
-      if (!initialCache) {
-        setError('スプレッドシートのデータ取得に失敗しました。GASの接続状況を確認してください。')
-      }
+      setError(err?.message || 'スプレッドシートの取得に失敗しました')
+      setShowTimeoutFallback(true)
+      // エラー発生時は待機画面を維持し、フォールバックUIで再試行またはキャッシュ利用を促す
     } finally {
       setSyncing(false)
-      setLoading(false)
     }
-  }, [setData, initialCache])
+  }, [setData])
 
-  // アプリ初期ロード時：常にスプレッドシートから生データを直接取得
+  // もう一度接続する（再試行）
+  const retryConnection = useCallback(async () => {
+    setShowTimeoutFallback(false)
+    setLoading(true)
+    setIsUsingCachedData(false)
+    setFetchAttempt(prev => prev + 1)
+    await refreshAll(true)
+  }, [refreshAll])
+
+  // 端末のlocalStorageおよびメモリ内キャッシュを全消去し、GASから強制再取得
+  const clearAllCacheAndResync = useCallback(async () => {
+    setSyncing(true)
+    setError(null)
+    try {
+      if (typeof window !== 'undefined') {
+        const keysToRemove = [
+          SWR_MASTER_CACHE_KEY,
+          SWR_USER_CACHE_KEY,
+          'sb_last_synced_time',
+          'school_bus_user',
+          'school_bus_active_session_v2',
+          'school_bus_user_session'
+        ]
+        keysToRemove.forEach(k => {
+          try { localStorage.removeItem(k) } catch (e) {}
+        })
+      }
+
+      // メモリステートのリセット
+      setDataState({
+        guardianMaster: DEFAULT_FALLBACK_GUARDIANS,
+        busStops: [],
+        schedules: [],
+        basicSettings: [],
+        schoolTimetable: [],
+        userPermissions: [],
+        holidays: []
+      })
+      setLastSyncedTime('')
+      setShowTimeoutFallback(false)
+      setIsUsingCachedData(false)
+
+      // GAS ScriptCache を破棄してスプレッドシート生データから強制フェッチ
+      const master = await fetchSpreadsheetMaster(true)
+      setData(master)
+
+      const now = new Date()
+      const hh = String(now.getHours()).padStart(2, '0')
+      const mm = String(now.getMinutes()).padStart(2, '0')
+      const ss = String(now.getSeconds()).padStart(2, '0')
+      const timeStr = `${hh}:${mm}:${ss}`
+      setLastSyncedTime(timeStr)
+      try {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sb_last_synced_time', timeStr)
+        }
+      } catch (e) {}
+
+      setLoading(false)
+      return { success: true, message: '端末の保存データを全消去し、最新データをGASから同期しました' }
+    } catch (err: any) {
+      console.error('[AppContext] Failed to clearAllCacheAndResync:', err)
+      setError(err?.message || 'キャッシュの消去・再同期に失敗しました')
+      return { success: false, message: err?.message || 'キャッシュの消去・再同期に失敗しました' }
+    } finally {
+      setSyncing(false)
+    }
+  }, [setData])
+
+  // アプリ初期ロード時：常にスプレッドシートから生データを直接取得（force=trueでGAS側キャッシュも強制破棄）
   useEffect(() => {
-    refreshAll()
+    refreshAll(true)
   }, [refreshAll])
 
   // タブ間・画面間リアルタイム乗車通知同期（BroadcastChannel）
@@ -557,7 +718,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: '運転手'
       })
     } else {
-      const target = studentName || user?.studentName || data.guardianMaster[0]?.student_names[0] || 'A-1'
+      const target = studentName || user?.studentName || data.guardianMaster[0]?.student_names[0] || ''
       await loginAsParentStudent(target)
     }
   }
@@ -595,7 +756,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await loginAsParentStudent(targetStudent)
       } else {
         // 先頭の生徒をデフォルトに
-        const first = data.guardianMaster[0]?.student_names[0] || 'A-1'
+        const first = data.guardianMaster[0]?.student_names[0] || ''
         await loginAsParentStudent(first)
       }
     }
@@ -1319,12 +1480,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loading,
         syncing,
         error,
+        lastSyncedTime,
+        showTimeoutFallback,
+        hasCachedData,
+        isUsingCachedData,
+        openWithCachedData,
+        retryConnection,
         guardianMaster: data.guardianMaster,
         busStops: data.busStops,
         schedules: data.schedules,
         basicSettings: data.basicSettings,
         schoolTimetable: data.schoolTimetable,
         userPermissions: data.userPermissions,
+        holidays: data.holidays || [],
         publishedMonths,
         login,
         logout,
@@ -1345,7 +1513,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         switchRole,
         quickLoginAs,
         loginAsParentStudent,
-        loginWithAuthCode
+        loginWithAuthCode,
+        clearAllCacheAndResync
       }}
     >
       {children}
